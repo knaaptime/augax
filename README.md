@@ -1,7 +1,8 @@
 # augax
 
 On-device draws for **conditionally Gaussian augmentation** in JAX, each an XLA
-FFI custom call. The one primitive so far is **Pólya-Gamma** sampling.
+FFI custom call: **Pólya-Gamma** sampling (`pg_sample`) and the **Kolmogorov
+scale** of the logistic's normal scale mixture (`ks_sample`).
 
 `augax.pg_sample(h, z, key)` draws `omega ~ PG(h, z)` from *inside* a JIT'd /
 `lax.scan`-ed / `pmap`-ed program with **no host round-trip** — the native
@@ -58,10 +59,26 @@ threads call at once. Normals and exponentials come from ziggurat samplers.
 
 An array longer than 65,536 elements is split into blocks of that size, each
 with its own stream, and the blocks are drawn in parallel on every hardware
-thread (set `PGJAX_NUM_THREADS` to cap it). The blocks depend only on the array
+thread (set `AUGAX_NUM_THREADS` to cap it). The blocks depend only on the array
 length, so a draw is the same on any machine and any thread count. On a large
 Negative-Binomial model (8.1M cells) this takes the draw from 3.6 s to 0.33 s on
 16 threads.
+
+## The Kolmogorov scale
+
+A standard logistic disturbance is a normal scale mixture,
+`eps | lam ~ N(0, lam^2)` with `lam = 2K` and `K` Kolmogorov distributed
+(Stefanski 1991). `ks_sample(u, key)` draws `lam` given `eps = u`, which makes a
+logistic latent variable conditionally Gaussian: the propagated disturbance of a
+latent SAR logit, for one. The draw is exact: `1/lam^2` is proposed from an
+inverse Gaussian, `IG(1/|u|, 1)` (a chi-square at `|u| < 1e-4`), and accepted
+with probability `S(v) = f(v) e^{v/2} <= 1`, `f` the density of `(2K)^2`,
+evaluated lazily by the squeeze of an alternating series — the Kolmogorov
+series above `v = 4/3` and its Jacobi transform below, where the first's
+partial sums are not bounds (Holmes & Held 2006). It is checked against the
+identity `E[exp(-t^2 lam^2 / 2)] = pi t / sinh(pi t)` and against the
+posterior moments by quadrature. `ks_sample_numpy(u, rng)` is the same C++
+sampler for host callers.
 
 ## Status
 
@@ -69,6 +86,7 @@ Negative-Binomial model (8.1M cells) this takes the draw from 3.6 s to 0.33 s on
   large-shape regimes.
 - Dispatch is automatic: the sampler is selected from `(h, z)` with no API
   change.
+- ✅ `ks_sample`: exact for every `u`, on the device and on the host.
 
 CPU-only (the sampler is cheap scalar work; the point is to keep it on-device
 next to the rest of a JIT'd Gibbs sweep).

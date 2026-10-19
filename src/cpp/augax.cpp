@@ -1,4 +1,7 @@
-// augax: on-device augmentation draws as XLA FFI custom calls (Pólya-Gamma).
+// augax: on-device augmentation draws as XLA FFI custom calls.
+//
+// Pólya-Gamma (`pg_sample`) and the Kolmogorov scale of the logistic's normal
+// scale mixture (`ks_sample`).
 //
 // Replaces the host `jax.pure_callback` PG draw (a device<->host round-trip
 // every Gibbs sweep, which serializes under jax.pmap and taxes every sweep) with
@@ -24,6 +27,7 @@
 // exponentials.
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 
 #include <algorithm>
 #include <atomic>
@@ -894,10 +898,10 @@ void draw_serial(const double* h, const double* z, int64_t n, uint64_t seed,
 // by the thread count, so a draw is reproducible on any machine.
 constexpr int64_t kBlock = int64_t{1} << 16;
 
-// Worker threads: PGJAX_NUM_THREADS if set, else every hardware thread.
+// Worker threads: AUGAX_NUM_THREADS if set, else every hardware thread.
 unsigned num_threads() {
   static const unsigned n = [] {
-    if (const char* env = std::getenv("PGJAX_NUM_THREADS")) {
+    if (const char* env = std::getenv("AUGAX_NUM_THREADS")) {
       long v = std::strtol(env, nullptr, 10);
       if (v > 0) return static_cast<unsigned>(v);
     }
@@ -907,15 +911,15 @@ unsigned num_threads() {
   return n;
 }
 
-// Draw omega[i] ~ PG(h[i], z[i]) for i in [0, n).  An array of up to one block
-// is one stream seeded by `seed`.  A larger one is split into blocks, each with
-// its own stream, drawn in parallel: PG draws are independent, and at the sizes
-// of large count models (millions of cells, most with h < 1 and so the 21-Gamma
+// Run block(lo, len, seed) over [0, n).  An array of up to one block is one
+// stream seeded by `seed`.  A larger one is split into blocks, each with its own
+// stream, drawn in parallel: the draws are independent, and at the sizes of
+// large count models (millions of cells, most with h < 1 and so the 21-Gamma
 // series) a single thread is the whole Gibbs sweep's bottleneck.
-void draw_range(const double* h, const double* z, int64_t n, uint64_t seed,
-                double* out) {
+template <class Block>
+void for_blocks(int64_t n, uint64_t seed, Block block) {
   if (n <= kBlock) {
-    draw_serial(h, z, n, seed, out);
+    block(0, n, seed);
     return;
   }
   const int64_t blocks = (n + kBlock - 1) / kBlock;
@@ -923,7 +927,7 @@ void draw_range(const double* h, const double* z, int64_t n, uint64_t seed,
     const int64_t lo = b * kBlock;
     const int64_t len = std::min(kBlock, n - lo);
     uint64_t s = seed ^ (0xD1B54A32D192ED03ULL * static_cast<uint64_t>(b + 1));
-    draw_serial(h + lo, z + lo, len, s, out + lo);
+    block(lo, len, s);
   };
   const unsigned T =
       static_cast<unsigned>(std::min<int64_t>(num_threads(), blocks));
@@ -940,6 +944,109 @@ void draw_range(const double* h, const double* z, int64_t n, uint64_t seed,
   for (unsigned t = 1; t < T; ++t) pool.emplace_back(worker);
   worker();
   for (auto& th : pool) th.join();
+}
+
+// Draw omega[i] ~ PG(h[i], z[i]) for i in [0, n).
+void draw_range(const double* h, const double* z, int64_t n, uint64_t seed,
+                double* out) {
+  for_blocks(n, seed, [&](int64_t lo, int64_t len, uint64_t s) {
+    draw_serial(h + lo, z + lo, len, s, out + lo);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The Kolmogorov scale of the logistic (Stefanski 1991; Holmes & Held 2006).
+//
+// A standard logistic eps is the normal scale mixture eps | lam ~ N(0, lam^2),
+// lam = 2K with K Kolmogorov distributed.  Given an observed eps = u, the
+// variance v = lam^2 has the density
+//
+//   p(v | u)  ∝  v^{-1/2} exp(-u^2 / (2v)) f(v),
+//   f(v)  =  sum_{j>=1} (-1)^{j+1} j^2 exp(-j^2 v / 2),
+//
+// f the density of (2K)^2.  Factor f(v) = exp(-v/2) S(v): the proposal
+// v^{-1/2} exp(-u^2/(2v) - v/2) is GIG(1/2, 1, u^2), the reciprocal of an
+// inverse Gaussian IG(1/|u|, 1), and the acceptance probability is S(v) <= 1,
+// so the rejection sampler is exact.  S(v) is evaluated lazily by the squeeze of
+// an alternating series: the j-series above for v > 4/3, and below it the
+// Jacobi-transformed series
+//
+//   S(v) = sqrt(2) pi^{5/2} v^{-5/2} exp(v/2 - pi^2/(2v))
+//          sum_{m odd} (m^2 - v/pi^2) exp(-(m^2 - 1) pi^2 / (2v)),
+//
+// whose partial sums interleave around S(v) when split term by term.  Both
+// branches are needed: the j-series' partial sums are not bounds below v ~ 1.
+// ---------------------------------------------------------------------------
+
+constexpr double KS_SPLIT = 4.0 / 3.0;
+const double KS_LOG_LEFT = 0.5 * std::log(2.0) + 2.5 * std::log(PI);
+
+// Accept v with probability S(v), given U ~ U(0, 1).
+inline bool ks_accept(double v, double U) {
+  if (v > KS_SPLIT) {
+    const double X = std::exp(-0.5 * v);
+    double Z = 1.0;
+    for (int j = 1;; j += 2) {
+      const double a = static_cast<double>((j + 1) * (j + 1));
+      const double ta = a * std::pow(X, a - 1.0);
+      Z -= ta;
+      if (Z > U) return true;
+      const double b = static_cast<double>((j + 2) * (j + 2));
+      const double tb = b * std::pow(X, b - 1.0);
+      Z += tb;
+      if (Z < U) return false;
+      if (tb == 0.0) return Z > U;  // the series has converged
+    }
+  }
+  const double H = KS_LOG_LEFT - 2.5 * std::log(v) - PI2 / (2.0 * v) + 0.5 * v;
+  const double lU = std::log(U);
+  const double X = std::exp(-PI2 / (2.0 * v));
+  const double K = v / PI2;
+  double Z = 1.0;
+  for (int m = 1;; m += 2) {
+    Z -= K * std::pow(X, static_cast<double>(m * m - 1));
+    if (H + std::log(Z) > lU) return true;
+    const double b = static_cast<double>((m + 2) * (m + 2));
+    const double tb = b * std::pow(X, b - 1.0);
+    Z += tb;
+    if (H + std::log(Z) < lU) return false;
+    if (tb == 0.0) return H + std::log(Z) > lU;  // the series has converged
+  }
+}
+
+// Below this |u| the proposal is chi^2_1 (GIG(1/2, 1, 0)) and exp(-u^2/(2v))
+// joins the acceptance; above it the IG proposal's 1/|u| mean stays finite.
+constexpr double KS_SMALL_U = 1e-4;
+
+// One draw of lam = sqrt(v) given eps = u.
+inline double sample_ks_scale(double u, Rng& rng) {
+  const double r = std::fabs(u);
+  for (;;) {
+    double v;
+    if (r < KS_SMALL_U) {
+      const double y = rng.normal();
+      v = y * y;
+      if (rng.unif() > std::exp(-0.5 * r * r / v)) continue;
+    } else {
+      // w = 1/v ~ IG(mu = 1/r, 1) (Michael, Schucany & Haas 1976), with
+      // mu y - sqrt(mu^2 y^2 + 4 mu y) rewritten to avoid cancellation.
+      const double mu = 1.0 / r;
+      const double y = rng.normal();
+      const double muy = mu * y * y;
+      double w = mu * (1.0 - 2.0 * muy / (muy + std::sqrt(muy * muy + 4.0 * muy)));
+      if (rng.unif() > mu / (mu + w)) w = mu * mu / w;
+      v = 1.0 / w;
+    }
+    if (ks_accept(v, rng.unif())) return std::sqrt(v);
+  }
+}
+
+// Draw lam[i] given u[i] for i in [0, n).
+void draw_ks_range(const double* u, int64_t n, uint64_t seed, double* out) {
+  for_blocks(n, seed, [&](int64_t lo, int64_t len, uint64_t s) {
+    Rng rng(s);
+    for (int64_t i = 0; i < len; ++i) out[lo + i] = sample_ks_scale(u[lo + i], rng);
+  });
 }
 
 }  // namespace
@@ -1003,12 +1110,76 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(PgSampleBatchedF64, PgSampleBatchedF64Impl,
                                   .Arg<ffi::Buffer<ffi::S64>>()  // seed [B]
                                   .Ret<ffi::Buffer<ffi::F64>>());
 
+// ks_sample_f64(u[n], seed[]) -> lam[n]
+// ks_sample_batched_f64(u[B,n], seed[B]) -> lam[B,n]
+static ffi::Error KsSampleF64Impl(ffi::Buffer<ffi::F64> u,
+                                  ffi::Buffer<ffi::S64> seed,
+                                  ffi::ResultBuffer<ffi::F64> out) {
+  uint64_t s = seed.element_count() > 0
+                   ? static_cast<uint64_t>(seed.typed_data()[0])
+                   : 0ULL;
+  draw_ks_range(u.typed_data(), static_cast<int64_t>(u.element_count()), s,
+                out->typed_data());
+  return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(KsSampleF64, KsSampleF64Impl,
+                              ffi::Ffi::Bind()
+                                  .Arg<ffi::Buffer<ffi::F64>>()  // u
+                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed
+                                  .Ret<ffi::Buffer<ffi::F64>>());
+
+static ffi::Error KsSampleBatchedF64Impl(ffi::Buffer<ffi::F64> u,
+                                         ffi::Buffer<ffi::S64> seed,
+                                         ffi::ResultBuffer<ffi::F64> out) {
+  auto d = u.dimensions();
+  if (d.size() < 2)
+    return ffi::Error::InvalidArgument("augax: batched u must be >= 2D");
+  int64_t batch = d[0];
+  int64_t n = static_cast<int64_t>(u.element_count()) / batch;
+  const int64_t* seeds = seed.typed_data();
+  int64_t nseed = static_cast<int64_t>(seed.element_count());
+  for (int64_t b = 0; b < batch; ++b) {
+    uint64_t s = static_cast<uint64_t>(seeds[nseed == batch ? b : 0]);
+    s ^= 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(b + 1);
+    draw_ks_range(u.typed_data() + b * n, n, s, out->typed_data() + b * n);
+  }
+  return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(KsSampleBatchedF64, KsSampleBatchedF64Impl,
+                              ffi::Ffi::Bind()
+                                  .Arg<ffi::Buffer<ffi::F64>>()  // u [B,n]
+                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed [B]
+                                  .Ret<ffi::Buffer<ffi::F64>>());
+
 NB_MODULE(augax_cpp, m) {
-  m.doc() = "On-device Pólya-Gamma sampling as XLA FFI custom calls";
+  m.doc() = "On-device augmentation draws as XLA FFI custom calls";
   m.def("pg_sample_f64_capsule", []() {
     return nb::capsule(reinterpret_cast<void*>(PgSampleF64));
   });
   m.def("pg_sample_batched_f64_capsule", []() {
     return nb::capsule(reinterpret_cast<void*>(PgSampleBatchedF64));
   });
+  m.def("ks_sample_f64_capsule", []() {
+    return nb::capsule(reinterpret_cast<void*>(KsSampleF64));
+  });
+  m.def("ks_sample_batched_f64_capsule", []() {
+    return nb::capsule(reinterpret_cast<void*>(KsSampleBatchedF64));
+  });
+  // The same KS draw for host (NumPy) callers: lam given u, from one seed.
+  m.def(
+      "ks_sample_host",
+      [](nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu> u,
+         uint64_t seed) {
+        const int64_t n = static_cast<int64_t>(u.shape(0));
+        double* out = new double[n > 0 ? n : 1];
+        {
+          nb::gil_scoped_release release;
+          draw_ks_range(u.data(), n, seed, out);
+        }
+        nb::capsule owner(out, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+        return nb::ndarray<nb::numpy, double, nb::ndim<1>>(out, {static_cast<size_t>(n)}, owner);
+      },
+      nb::arg("u"), nb::arg("seed"));
 }
