@@ -8,11 +8,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import pgjax  # noqa: E402
+import augax  # noqa: E402
 
 
 def _draw(key, n=4):
-    return pgjax.pg_sample(jnp.ones(n), jnp.zeros(n), key)
+    return augax.pg_sample(jnp.ones(n), jnp.zeros(n), key)
 
 
 def test_vmap_over_keys_gives_independent_streams():
@@ -38,5 +38,5 @@ def test_nested_vmap_matches_flat_vmap(jit):
 def test_vmap_with_unbatched_arguments():
     """Only z batched: h and the key broadcast across the batch."""
     z = jnp.linspace(-2.0, 2.0, 3)[:, None] * jnp.ones((3, 4))
-    out = jax.vmap(lambda zz: pgjax.pg_sample(jnp.ones(4), zz, jax.random.key(2)))(z)
+    out = jax.vmap(lambda zz: augax.pg_sample(jnp.ones(4), zz, jax.random.key(2)))(z)
     assert out.shape == (3, 4) and bool(jnp.all(out > 0))

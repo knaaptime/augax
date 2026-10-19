@@ -1,4 +1,4 @@
-// pgjax: on-device Pólya-Gamma sampling as XLA FFI custom calls.
+// augax: on-device augmentation draws as XLA FFI custom calls (Pólya-Gamma).
 //
 // Replaces the host `jax.pure_callback` PG draw (a device<->host round-trip
 // every Gibbs sweep, which serializes under jax.pmap and taxes every sweep) with
@@ -319,7 +319,7 @@ inline double sample_pg_gamma_series(double h, double z, Rng& rng) {
 // approximation. O(1) per accepted draw, preferred for large h.
 //
 // Algorithm and constants ported from zoj613/polyagamma (BSD-3-Clause,
-// compatible with this package's license), adapted to pgjax's Rng and to
+// compatible with this package's license), adapted to augax's Rng and to
 // double precision throughout.
 // ---------------------------------------------------------------------------
 
@@ -958,7 +958,7 @@ static ffi::Error PgSampleF64Impl(ffi::Buffer<ffi::F64> h,
                                   ffi::ResultBuffer<ffi::F64> out) {
   int64_t n = static_cast<int64_t>(h.element_count());
   if (static_cast<int64_t>(z.element_count()) != n)
-    return ffi::Error::InvalidArgument("pgjax: h and z must have equal length");
+    return ffi::Error::InvalidArgument("augax: h and z must have equal length");
   uint64_t s = seed.element_count() > 0
                    ? static_cast<uint64_t>(seed.typed_data()[0])
                    : 0ULL;
@@ -979,7 +979,7 @@ static ffi::Error PgSampleBatchedF64Impl(ffi::Buffer<ffi::F64> h,
                                          ffi::ResultBuffer<ffi::F64> out) {
   auto d = h.dimensions();
   if (d.size() < 2)
-    return ffi::Error::InvalidArgument("pgjax: batched h must be >= 2D");
+    return ffi::Error::InvalidArgument("augax: batched h must be >= 2D");
   int64_t batch = d[0];
   int64_t n = static_cast<int64_t>(h.element_count()) / batch;
   const int64_t* seeds = seed.typed_data();
@@ -1003,7 +1003,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(PgSampleBatchedF64, PgSampleBatchedF64Impl,
                                   .Arg<ffi::Buffer<ffi::S64>>()  // seed [B]
                                   .Ret<ffi::Buffer<ffi::F64>>());
 
-NB_MODULE(pgjax_cpp, m) {
+NB_MODULE(augax_cpp, m) {
   m.doc() = "On-device Pólya-Gamma sampling as XLA FFI custom calls";
   m.def("pg_sample_f64_capsule", []() {
     return nb::capsule(reinterpret_cast<void*>(PgSampleF64));

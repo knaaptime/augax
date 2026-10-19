@@ -1,4 +1,11 @@
-"""pgjax: on-device Pólya-Gamma sampling as an XLA FFI custom call.
+"""augax: on-device draws for conditionally Gaussian augmentation, in JAX.
+
+Each primitive is an XLA FFI custom call that samples one augmentation
+variable inside ``@jax.jit`` / ``lax.scan``.  It ships one:
+
+``pg_sample``
+    Pólya–Gamma, ``omega ~ PG(h, z)``, for the logit and negative-binomial
+    likelihoods (Polson, Scott & Windle 2013).
 
 Draw ``omega ~ PG(h, z)`` from inside ``@jax.jit`` / ``lax.scan`` with no host
 round-trip — the native replacement for ``jax.pure_callback(random_polyagamma)``
@@ -13,41 +20,41 @@ saddlepoint rejection sampler for larger ``h``, and a moment-matched normal abov
 
 Example::
 
-    import jax, pgjax
+    import jax, augax
     jax.config.update("jax_enable_x64", True)
 
     @jax.jit
     def step(h, z, key):
-        return pgjax.pg_sample(h, z, key)   # on-device PG draw
+        return augax.pg_sample(h, z, key)   # on-device PG draw
 """
 
 import jax
 import jax.numpy as jnp
 
-import pgjax_cpp as _cpp
+import augax_cpp as _cpp
 
 try:
     # Single source of truth: the version in the git tag, via the installed
     # distribution's metadata (setuptools-scm).
     from importlib.metadata import version as _dist_version
 
-    __version__ = _dist_version("pgjax")
+    __version__ = _dist_version("augax")
 except Exception:  # running from a source tree that was never installed
     __version__ = "0+unknown"
 __all__ = ["pg_sample"]
 
 jax.ffi.register_ffi_target(
-    "pgjax_sample_f64", _cpp.pg_sample_f64_capsule(), platform="cpu"
+    "augax_pg_sample_f64", _cpp.pg_sample_f64_capsule(), platform="cpu"
 )
 jax.ffi.register_ffi_target(
-    "pgjax_sample_batched_f64", _cpp.pg_sample_batched_f64_capsule(), platform="cpu"
+    "augax_pg_sample_batched_f64", _cpp.pg_sample_batched_f64_capsule(), platform="cpu"
 )
 
 
 def _require_x64():
     if not jax.config.jax_enable_x64:
         raise RuntimeError(
-            'pgjax requires 64-bit mode: jax.config.update("jax_enable_x64", True)'
+            'augax requires 64-bit mode: jax.config.update("jax_enable_x64", True)'
         )
 
 
@@ -66,7 +73,7 @@ def _seed_from_key(key):
 def _sample_batched(h, z, seed):
     """One FFI call for a batch: ``h``, ``z`` are ``(B, ...)``, ``seed`` is ``(B,)``."""
     call = jax.ffi.ffi_call(
-        "pgjax_sample_batched_f64", jax.ShapeDtypeStruct(h.shape, h.dtype)
+        "augax_pg_sample_batched_f64", jax.ShapeDtypeStruct(h.shape, h.dtype)
     )
     return call(h, z, seed)
 
@@ -95,7 +102,7 @@ def _sample_batched_vmap(axis_size, in_batched, h, z, seed):
 
 @jax.custom_batching.custom_vmap
 def _dispatch(h, z, seed):
-    call = jax.ffi.ffi_call("pgjax_sample_f64", jax.ShapeDtypeStruct(h.shape, h.dtype))
+    call = jax.ffi.ffi_call("augax_pg_sample_f64", jax.ShapeDtypeStruct(h.shape, h.dtype))
     return call(h, z, seed)
 
 

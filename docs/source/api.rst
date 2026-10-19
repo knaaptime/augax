@@ -1,13 +1,12 @@
 .. _api_ref:
 
-.. currentmodule:: pgjax
+.. currentmodule:: augax
 
 API reference
 =============
 
-The public API of ``pgjax`` is intentionally minimal — a single sampler
-function that works inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and
-``jax.pmap``.
+The public API of ``augax`` is one sampler per augmentation scheme; each works
+inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and ``jax.pmap``.
 
 Sampling
 --------
@@ -36,7 +35,7 @@ they are not part of the stable public API.
 Module contents
 ---------------
 
-.. automodule:: pgjax
+.. automodule:: augax
    :members:
    :undoc-members:
    :show-inheritance:

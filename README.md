@@ -1,20 +1,21 @@
-# pgjax
+# augax
 
-On-device **Pólya-Gamma** sampling for JAX, as an XLA FFI custom call.
+On-device draws for **conditionally Gaussian augmentation** in JAX, each an XLA
+FFI custom call. The one primitive so far is **Pólya-Gamma** sampling.
 
-`pgjax.pg_sample(h, z, key)` draws `omega ~ PG(h, z)` from *inside* a JIT'd /
+`augax.pg_sample(h, z, key)` draws `omega ~ PG(h, z)` from *inside* a JIT'd /
 `lax.scan`-ed / `pmap`-ed program with **no host round-trip** — the native
 replacement for `jax.pure_callback(random_polyagamma, ...)`, which pays a
 device↔host round-trip on every Pólya-Gamma Gibbs sweep and serializes under
 `jax.pmap`.
 
 ```python
-import jax, pgjax
+import jax, augax
 jax.config.update("jax_enable_x64", True)
 
 @jax.jit
 def omega_update(h, z, key):
-    return pgjax.pg_sample(h, z, key)
+    return augax.pg_sample(h, z, key)
 ```
 
 ## Method
@@ -40,11 +41,11 @@ against the exact mean and variance:
 - **Alternate sampler, `1 < h < 4`, small `|z|`**: `polyagamma` runs +0.4–0.9% in
   the mean and +1–5% in the variance. Its right-hand envelope uses the constant
   `(π/2)^(h/2)`, where both its Gamma proposal and the density's tail carry
-  `(π/2)^h`; pgjax uses the latter.
+  `(π/2)^h`; augax uses the latter.
 - **`h < 1`**: the alternate method assumes `h >= 1`; below it `polyagamma` runs
-  −0.4–0.8% in the mean. pgjax uses the Gamma series.
+  −0.4–0.8% in the mean. augax uses the Gamma series.
 - **`4 < h < 8` with `|z| <= 4`**: `polyagamma` uses the saddlepoint
-  approximation, 1–2% low in the variance. pgjax uses the exact alternate
+  approximation, 1–2% low in the variance. augax uses the exact alternate
   sampler.
 
 The saddlepoint and alternate samplers are ported from `polyagamma`

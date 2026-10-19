@@ -1,6 +1,6 @@
-﻿pgjax.\_sample\_batched
+﻿augax.\_sample\_batched
 =======================
 
-.. currentmodule:: pgjax
+.. currentmodule:: augax
 
 .. autofunction:: _sample_batched

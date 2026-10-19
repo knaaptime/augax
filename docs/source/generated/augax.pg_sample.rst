@@ -1,6 +1,6 @@
-﻿pgjax.pg\_sample
+﻿augax.pg\_sample
 ================
 
-.. currentmodule:: pgjax
+.. currentmodule:: augax
 
 .. autofunction:: pg_sample
