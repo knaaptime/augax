@@ -1,0 +1,6 @@
+﻿augax.\_ks\_dispatch
+====================
+
+.. currentmodule:: augax
+
+.. autodata:: _ks_dispatch

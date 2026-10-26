@@ -1,13 +1,13 @@
 # Installation
 
-`pgjax` supports Python >= 3.9. We recommend using [miniforge] or [pixi].
+`augax` supports Python >= 3.9. We recommend using [miniforge] or [pixi].
 
 ## Installing a released version
 
-`pgjax` is available on PyPI and can be installed with:
+`augax` is available on PyPI and can be installed with:
 
 ```bash
-pip install pgjax
+pip install augax
 ```
 
 JAX is a core dependency and is always installed.
@@ -17,10 +17,10 @@ JAX is a core dependency and is always installed.
 For development, clone the repository and install in editable mode:
 
 ```bash
-git clone https://github.com/knaaptime/pgjax.git
-cd pgjax
+git clone https://github.com/knaaptime/augax.git
+cd augax
 conda env create -f environment.yml
-conda activate pgjax
+conda activate augax
 pip install -e . --no-deps
 ```
 
@@ -29,16 +29,16 @@ pip install -e . --no-deps
 ```python
 import jax
 jax.config.update("jax_enable_x64", True)
-import pgjax
+import augax
 
 key = jax.random.PRNGKey(0)
 h = jax.numpy.ones(5)
 z = jax.numpy.zeros(5)
-print(pgjax.pg_sample(h, z, key))
+print(augax.pg_sample(h, z, key))
 ```
 
 !!! note
-    `pgjax` requires 64-bit mode (`jax_enable_x64 = True`). A
+    `augax` requires 64-bit mode (`jax_enable_x64 = True`). A
     `RuntimeError` is raised if x64 is not enabled.
 
 [miniforge]: https://github.com/conda-forge/miniforge

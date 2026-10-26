@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="pgjax.pg_sample" href="generated/pgjax.pg_sample.html"><link rel="prev" title="Installation" href="installation.html">
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="augax.pg_sample" href="generated/augax.pg_sample.html"><link rel="prev" title="Installation" href="installation.html">
 
-    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>API reference - pgjax</title>
+    <!-- Generated with Sphinx 9.2.0 and Furo 2025.12.19 -->
+        <title>API reference - augax</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">pgjax</div></a>
+      <a href="index.html"><div class="brand">augax</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">pgjax</span>
+  <span class="sidebar-brand-text">augax</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -198,11 +198,15 @@
 <p class="caption" role="heading"><span class="caption-text">API</span></p>
 <ul class="current">
 <li class="toctree-l1 current has-children current-page"><a class="current reference internal" href="#">API reference</a><input aria-label="Toggle navigation of API reference" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax.pg_sample.html">pgjax.pg_sample</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._seed_from_key.html">pgjax._seed_from_key</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._dispatch.html">pgjax._dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._sample_batched.html">pgjax._sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._require_x64.html">pgjax._require_x64</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample.html">augax.pg_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample.html">augax.ks_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample_numpy.html">augax.ks_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._seed_from_key.html">augax._seed_from_key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._dispatch.html">augax._dispatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._sample_batched.html">augax._sample_batched</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_dispatch.html">augax._ks_dispatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_sample_batched.html">augax._ks_sample_batched</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._require_x64.html">augax._require_x64</a></li>
 </ul>
 </li>
 </ul>
@@ -249,37 +253,48 @@
         <article role="main" id="furo-main-content">
           <section id="api-reference">
 <span id="api-ref"></span><h1>API reference<a class="headerlink" href="#api-reference" title="Link to this heading">¶</a></h1>
-<p>The public API of <code class="docutils literal notranslate"><span class="pre">pgjax</span></code> is intentionally minimal — a single sampler
-function that works inside <code class="docutils literal notranslate"><span class="pre">jax.jit</span></code>, <code class="docutils literal notranslate"><span class="pre">jax.vmap</span></code>, <code class="docutils literal notranslate"><span class="pre">lax.scan</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">jax.pmap</span></code>.</p>
+<p>The public API of <code class="docutils literal notranslate"><span class="pre">augax</span></code> is one sampler per augmentation scheme; each works
+inside <code class="docutils literal notranslate"><span class="pre">jax.jit</span></code>, <code class="docutils literal notranslate"><span class="pre">jax.vmap</span></code>, <code class="docutils literal notranslate"><span class="pre">lax.scan</span></code>, and <code class="docutils literal notranslate"><span class="pre">jax.pmap</span></code>.</p>
 <section id="sampling">
 <h2>Sampling<a class="headerlink" href="#sampling" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper autosummary longtable docutils container">
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/pgjax.pg_sample.html#pgjax.pg_sample" title="pgjax.pg_sample"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pg_sample</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/augax.pg_sample.html#augax.pg_sample" title="augax.pg_sample"><code class="xref py py-obj docutils literal notranslate"><span class="pre">pg_sample</span></code></a></p></td>
 <td><p>Draw <code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">~</span> <span class="pre">PG(h,</span> <span class="pre">z)</span></code> element-wise, on-device.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ks_sample</span></code></a></p></td>
+<td><p>Draw the Kolmogorov scale <code class="docutils literal notranslate"><span class="pre">lam</span></code> given a logistic disturbance <code class="docutils literal notranslate"><span class="pre">u</span></code>, on-device.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/augax.ks_sample_numpy.html#augax.ks_sample_numpy" title="augax.ks_sample_numpy"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ks_sample_numpy</span></code></a></p></td>
+<td><p><a class="reference internal" href="generated/augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample()</span></code></a> on the host: the same sampler, for NumPy callers.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 <section id="internal-helpers">
 <h3>Internal helpers<a class="headerlink" href="#internal-helpers" title="Link to this heading">¶</a></h3>
-<p>These functions support <a class="reference internal" href="generated/pgjax.pg_sample.html#pgjax.pg_sample" title="pgjax.pg_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">pg_sample()</span></code></a> and are documented for completeness;
-they are not part of the stable public API.</p>
+<p>These functions support <a class="reference internal" href="generated/augax.pg_sample.html#augax.pg_sample" title="augax.pg_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">pg_sample()</span></code></a> and <a class="reference internal" href="generated/augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample()</span></code></a> and are
+documented for completeness; they are not part of the stable public API.</p>
 <div class="table-wrapper autosummary longtable docutils container">
 <table class="autosummary longtable docutils align-default">
 <tbody>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/pgjax._seed_from_key.html#pgjax._seed_from_key" title="pgjax._seed_from_key"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_seed_from_key</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/augax._seed_from_key.html#augax._seed_from_key" title="augax._seed_from_key"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_seed_from_key</span></code></a></p></td>
 <td><p>Derive an int64 RNG seed from a JAX PRNG key (per-key, reproducible).</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/pgjax._dispatch.html#pgjax._dispatch" title="pgjax._dispatch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_dispatch</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/augax._dispatch.html#augax._dispatch" title="augax._dispatch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_dispatch</span></code></a></p></td>
 <td><p></p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/pgjax._sample_batched.html#pgjax._sample_batched" title="pgjax._sample_batched"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_sample_batched</span></code></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/augax._sample_batched.html#augax._sample_batched" title="augax._sample_batched"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_sample_batched</span></code></a></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">h</span></code>, <code class="docutils literal notranslate"><span class="pre">z</span></code> are <code class="docutils literal notranslate"><span class="pre">(B,</span> <span class="pre">...)</span></code>, <code class="docutils literal notranslate"><span class="pre">seed</span></code> is <code class="docutils literal notranslate"><span class="pre">(B,)</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/pgjax._require_x64.html#pgjax._require_x64" title="pgjax._require_x64"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_require_x64</span></code></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/augax._ks_dispatch.html#augax._ks_dispatch" title="augax._ks_dispatch"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_ks_dispatch</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/augax._ks_sample_batched.html#augax._ks_sample_batched" title="augax._ks_sample_batched"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_ks_sample_batched</span></code></a></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">u</span></code> is <code class="docutils literal notranslate"><span class="pre">(B,</span> <span class="pre">...)</span></code>, <code class="docutils literal notranslate"><span class="pre">seed</span></code> is <code class="docutils literal notranslate"><span class="pre">(B,)</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/augax._require_x64.html#augax._require_x64" title="augax._require_x64"><code class="xref py py-obj docutils literal notranslate"><span class="pre">_require_x64</span></code></a></p></td>
 <td><p></p></td>
 </tr>
 </tbody>
@@ -289,7 +304,18 @@ they are not part of the stable public API.</p>
 </section>
 <section id="module-contents">
 <h2>Module contents<a class="headerlink" href="#module-contents" title="Link to this heading">¶</a></h2>
-<p>pgjax: on-device Pólya-Gamma sampling as an XLA FFI custom call.</p>
+<p>augax: on-device draws for conditionally Gaussian augmentation, in JAX.</p>
+<p>Each primitive is an XLA FFI custom call that samples one augmentation
+variable inside <code class="docutils literal notranslate"><span class="pre">&#64;jax.jit</span></code> / <code class="docutils literal notranslate"><span class="pre">lax.scan</span></code>.  It ships one:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">pg_sample</span></code></dt><dd><p>Pólya–Gamma, <code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">~</span> <span class="pre">PG(h,</span> <span class="pre">z)</span></code>, for the logit and negative-binomial
+likelihoods (Polson, Scott &amp; Windle 2013).</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">ks_sample</span></code></dt><dd><p>The Kolmogorov scale of a logistic disturbance, <code class="docutils literal notranslate"><span class="pre">lam</span> <span class="pre">|</span> <span class="pre">eps</span></code>, which makes
+the logistic a normal scale mixture (Stefanski 1991; Holmes &amp; Held 2006).
+<a class="reference internal" href="generated/augax.ks_sample_numpy.html#augax.ks_sample_numpy" title="augax.ks_sample_numpy"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample_numpy()</span></code></a> is the same draw for host (NumPy) callers.</p>
+</dd>
+</dl>
 <p>Draw <code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">~</span> <span class="pre">PG(h,</span> <span class="pre">z)</span></code> from inside <code class="docutils literal notranslate"><span class="pre">&#64;jax.jit</span></code> / <code class="docutils literal notranslate"><span class="pre">lax.scan</span></code> with no host
 round-trip — the native replacement for <code class="docutils literal notranslate"><span class="pre">jax.pure_callback(random_polyagamma)</span></code>
 that taxes every Gibbs sweep (and serializes under <code class="docutils literal notranslate"><span class="pre">jax.pmap</span></code>).</p>
@@ -300,17 +326,69 @@ saddlepoint region — e.g. the Negative-Binomial <code class="docutils literal 
 saddlepoint rejection sampler for larger <code class="docutils literal notranslate"><span class="pre">h</span></code>, and a moment-matched normal above
 <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">50</span></code> (see the README).</p>
 <p>Example:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="o">,</span><span class="w"> </span><span class="nn">pgjax</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="o">,</span><span class="w"> </span><span class="nn">augax</span>
 <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 
 <span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">step</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">pgjax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>   <span class="c1"># on-device PG draw</span>
+    <span class="k">return</span> <span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>   <span class="c1"># on-device PG draw</span>
 </pre></div>
 </div>
 <dl class="py function">
 <dt class="sig sig-object py">
-<span class="sig-prename descclassname"><span class="pre">pgjax.</span></span><span class="sig-name descname"><span class="pre">pg_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">h</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">z</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/pgjax/blob/v0.2.0/pgjax/__init__.py#L114-L139"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
+<span class="sig-prename descclassname"><span class="pre">augax.</span></span><span class="sig-name descname"><span class="pre">ks_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">u</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/augax/blob/v0.3.0/augax/__init__.py#L209-L239"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
+<dd><p>Draw the Kolmogorov scale <code class="docutils literal notranslate"><span class="pre">lam</span></code> given a logistic disturbance <code class="docutils literal notranslate"><span class="pre">u</span></code>, on-device.</p>
+<p>A standard logistic <span class="math notranslate nohighlight">\(\varepsilon\)</span> is the normal scale mixture
+<span class="math notranslate nohighlight">\(\varepsilon \mid \lambda \sim N(0, \lambda^2)\)</span>, <span class="math notranslate nohighlight">\(\lambda = 2K\)</span>
+with <span class="math notranslate nohighlight">\(K\)</span> Kolmogorov distributed.  Given <span class="math notranslate nohighlight">\(\varepsilon = u\)</span> this
+draws <span class="math notranslate nohighlight">\(\lambda\)</span> from</p>
+<div class="math-wrapper docutils container">
+<div class="math notranslate nohighlight">
+\[p(\lambda \mid u) \propto \lambda^{-1}\,\varphi(u/\lambda)\,f_{2K}(\lambda),\]</div>
+</div>
+<p>exactly: a rejection sampler with an inverse-Gaussian proposal for
+<span class="math notranslate nohighlight">\(1/\lambda^2\)</span> and the alternating-series squeeze of the Kolmogorov
+density in both of its forms (Holmes &amp; Held 2006).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>u</strong> (<em>array_like</em>) – Shape <code class="docutils literal notranslate"><span class="pre">[n]</span></code> float64: the disturbances.</p></li>
+<li><p><strong>key</strong> (<a class="reference external" href="https://docs.jax.dev/en/latest/_autosummary/jax.Array.html#jax.Array" title="(in JAX)"><em>jax.Array</em></a>) – A JAX PRNG key. <code class="docutils literal notranslate"><span class="pre">vmap</span></code> over a batch of keys draws each element’s
+batch with its own RNG stream.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>lam</strong> – The scales, with the shape of <code class="docutils literal notranslate"><span class="pre">u</span></code>; <code class="docutils literal notranslate"><span class="pre">lam**2</span></code> is the variance.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://docs.jax.dev/en/latest/_autosummary/jax.Array.html#jax.Array" title="(in JAX)">jax.Array</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-prename descclassname"><span class="pre">augax.</span></span><span class="sig-name descname"><span class="pre">ks_sample_numpy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">u</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/augax/blob/v0.3.0/augax/__init__.py#L242-L259"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
+<dd><p><a class="reference internal" href="generated/augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample()</span></code></a> on the host: the same sampler, for NumPy callers.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>u</strong> (<em>array_like</em>) – The disturbances, any shape, as float64.</p></li>
+<li><p><strong>rng</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/random/generator.html#numpy.random.Generator" title="(in NumPy v2.5)"><em>numpy.random.Generator</em></a>) – Supplies the seed of the C++ stream.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>lam</strong> – The scales, with the shape of <code class="docutils literal notranslate"><span class="pre">u</span></code>.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)">numpy.ndarray</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-prename descclassname"><span class="pre">augax.</span></span><span class="sig-name descname"><span class="pre">pg_sample</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">h</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">z</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/augax/blob/v0.3.0/augax/__init__.py#L134-L159"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
 <dd><p>Draw <code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">~</span> <span class="pre">PG(h,</span> <span class="pre">z)</span></code> element-wise, on-device.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -339,12 +417,12 @@ batch with its own RNG stream.</p></li>
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="generated/pgjax.pg_sample.html">
+          <a class="next-page" href="generated/augax.pg_sample.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">pgjax.pg_sample</div>
+                <div class="title">augax.pg_sample</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -363,7 +441,7 @@ batch with its own RNG stream.</p></li>
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2024-, pgjax developers
+                Copyright &#169; 2024-, augax developers
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -406,11 +484,13 @@ batch with its own RNG stream.</p></li>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=938c9ccc"></script>
+</div><script src="_static/documentation_options.js?v=e259d695"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="_static/copybutton.js?v=f281be69"></script>
+    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     </body>
 </html>

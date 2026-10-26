@@ -3,10 +3,10 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="API reference" href="api.html"><link rel="prev" title="pgjax" href="index.html">
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="API reference" href="api.html"><link rel="prev" title="augax" href="index.html">
 
-    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Installation - pgjax</title>
+    <!-- Generated with Sphinx 9.2.0 and Furo 2025.12.19 -->
+        <title>Installation - augax</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="index.html"><div class="brand">pgjax</div></a>
+      <a href="index.html"><div class="brand">augax</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="index.html">
   
-  <span class="sidebar-brand-text">pgjax</span>
+  <span class="sidebar-brand-text">augax</span>
   
 </a><form class="sidebar-search-container" method="get" action="search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -198,11 +198,15 @@
 <p class="caption" role="heading"><span class="caption-text">API</span></p>
 <ul>
 <li class="toctree-l1 has-children"><a class="reference internal" href="api.html">API reference</a><input aria-label="Toggle navigation of API reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax.pg_sample.html">pgjax.pg_sample</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._seed_from_key.html">pgjax._seed_from_key</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._dispatch.html">pgjax._dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._sample_batched.html">pgjax._sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/pgjax._require_x64.html">pgjax._require_x64</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample.html">augax.pg_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample.html">augax.ks_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample_numpy.html">augax.ks_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._seed_from_key.html">augax._seed_from_key</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._dispatch.html">augax._dispatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._sample_batched.html">augax._sample_batched</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_dispatch.html">augax._ks_dispatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_sample_batched.html">augax._ks_sample_batched</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax._require_x64.html">augax._require_x64</a></li>
 </ul>
 </li>
 </ul>
@@ -249,11 +253,11 @@
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="installation">
 <h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
-<p><code class="docutils literal notranslate"><span class="pre">pgjax</span></code> supports Python &gt;= 3.9. We recommend using <a class="reference external" href="https://github.com/conda-forge/miniforge">miniforge</a> or <a class="reference external" href="https://pixi.sh">pixi</a>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">augax</span></code> supports Python &gt;= 3.9. We recommend using <a class="reference external" href="https://github.com/conda-forge/miniforge">miniforge</a> or <a class="reference external" href="https://pixi.sh">pixi</a>.</p>
 <section id="installing-a-released-version">
 <h2>Installing a released version<a class="headerlink" href="#installing-a-released-version" title="Link to this heading">¶</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">pgjax</span></code> is available on PyPI and can be installed with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>pgjax
+<p><code class="docutils literal notranslate"><span class="pre">augax</span></code> is available on PyPI and can be installed with:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>augax
 </pre></div>
 </div>
 <p>JAX is a core dependency and is always installed.</p>
@@ -261,10 +265,10 @@
 <section id="installing-from-source">
 <h2>Installing from source<a class="headerlink" href="#installing-from-source" title="Link to this heading">¶</a></h2>
 <p>For development, clone the repository and install in editable mode:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/knaaptime/pgjax.git
-<span class="nb">cd</span><span class="w"> </span>pgjax
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/knaaptime/augax.git
+<span class="nb">cd</span><span class="w"> </span>augax
 conda<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>environment.yml
-conda<span class="w"> </span>activate<span class="w"> </span>pgjax
+conda<span class="w"> </span>activate<span class="w"> </span>augax
 pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 </pre></div>
 </div>
@@ -273,16 +277,16 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <h2>Verifying the installation<a class="headerlink" href="#verifying-the-installation" title="Link to this heading">¶</a></h2>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 <span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pgjax</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">augax</span>
 
 <span class="n">key</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">h</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">numpy</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
 <span class="n">z</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">numpy</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">pgjax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span>
 </pre></div>
 </div>
 <p>!!! note
-<code class="docutils literal notranslate"><span class="pre">pgjax</span></code> requires 64-bit mode (<code class="docutils literal notranslate"><span class="pre">jax_enable_x64</span> <span class="pre">=</span> <span class="pre">True</span></code>). A
+<code class="docutils literal notranslate"><span class="pre">augax</span></code> requires 64-bit mode (<code class="docutils literal notranslate"><span class="pre">jax_enable_x64</span> <span class="pre">=</span> <span class="pre">True</span></code>). A
 <code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code> is raised if x64 is not enabled.</p>
 </section>
 </section>
@@ -316,7 +320,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2024-, pgjax developers
+                Copyright &#169; 2024-, augax developers
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -357,7 +361,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=938c9ccc"></script>
+</div><script src="_static/documentation_options.js?v=e259d695"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

@@ -1,13 +1,12 @@
 .. _api_ref:
 
-.. currentmodule:: pgjax
+.. currentmodule:: augax
 
 API reference
 =============
 
-The public API of ``pgjax`` is intentionally minimal — a single sampler
-function that works inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and
-``jax.pmap``.
+The public API of ``augax`` is one sampler per augmentation scheme; each works
+inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and ``jax.pmap``.
 
 Sampling
 --------
@@ -17,12 +16,14 @@ Sampling
    :nosignatures:
 
    pg_sample
+   ks_sample
+   ks_sample_numpy
 
 Internal helpers
 ~~~~~~~~~~~~~~~~
 
-These functions support :func:`pg_sample` and are documented for completeness;
-they are not part of the stable public API.
+These functions support :func:`pg_sample` and :func:`ks_sample` and are
+documented for completeness; they are not part of the stable public API.
 
 .. autosummary::
    :toctree: generated/
@@ -31,12 +32,14 @@ they are not part of the stable public API.
    _seed_from_key
    _dispatch
    _sample_batched
+   _ks_dispatch
+   _ks_sample_batched
    _require_x64
 
 Module contents
 ---------------
 
-.. automodule:: pgjax
+.. automodule:: augax
    :members:
    :undoc-members:
    :show-inheritance:

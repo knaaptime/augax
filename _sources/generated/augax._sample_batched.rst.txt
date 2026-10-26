@@ -1,0 +1,6 @@
+﻿augax.\_sample\_batched
+=======================
+
+.. currentmodule:: augax
+
+.. autodata:: _sample_batched

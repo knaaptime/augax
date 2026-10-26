@@ -1,0 +1,6 @@
+﻿augax.\_ks\_sample\_batched
+===========================
+
+.. currentmodule:: augax
+
+.. autodata:: _ks_sample_batched
