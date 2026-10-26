@@ -57,7 +57,7 @@ jobs:
       # is current enough for modern prebuilt wheels of everything involved.
       CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
       CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
-      # pgjax is self-contained C++ (it links no SuiteSparse and no OpenMP), so
+      # augax is self-contained C++ (it links no SuiteSparse and no OpenMP), so
       # no platform needs system libraries.  jax comes from pyproject's
       # [build-system] pin -- the build is isolated, so nothing is
       # pip-installed here.  cibuildwheel v4 repairs Windows wheels with

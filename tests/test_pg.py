@@ -1,4 +1,4 @@
-"""Correctness tests for pgjax against the reference `polyagamma` sampler."""
+"""Correctness tests for augax against the reference `polyagamma` sampler."""
 
 import numpy as np
 import pytest
@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
-import pgjax  # noqa: E402
+import augax  # noqa: E402
 
 pa = pytest.importorskip("polyagamma")
 stats = pytest.importorskip("scipy.stats")
@@ -18,7 +18,7 @@ N = 100_000
 def _draw(h, z, seed=0):
     key = jax.random.PRNGKey(seed)
     return np.asarray(
-        pgjax.pg_sample(jnp.full(N, float(h)), jnp.full(N, float(z)), key)
+        augax.pg_sample(jnp.full(N, float(h)), jnp.full(N, float(z)), key)
     )
 
 
@@ -56,7 +56,7 @@ def test_moments_match_analytic(h, z):
     """
     n = 400_000
     x = np.asarray(
-        pgjax.pg_sample(
+        augax.pg_sample(
             jnp.full(n, float(h)),
             jnp.full(n, float(z)),
             jax.random.PRNGKey(int(h * 1000) + int(abs(z) * 10)),
@@ -71,7 +71,7 @@ def test_moments_match_analytic(h, z):
 
 def test_jit_and_vmap():
     """Works under jit(vmap) with independent per-chain RNG streams."""
-    f = jax.jit(jax.vmap(pgjax.pg_sample))
+    f = jax.jit(jax.vmap(augax.pg_sample))
     B, n = 4, 8
     h = jnp.full((B, n), 3.0)
     z = jnp.zeros((B, n))
@@ -85,7 +85,7 @@ def test_jit_and_vmap():
 def test_requires_x64_positive_and_shape():
     key = jax.random.PRNGKey(0)
     with pytest.raises(ValueError):
-        pgjax.pg_sample(jnp.ones(3), jnp.zeros(4), key)  # shape mismatch
+        augax.pg_sample(jnp.ones(3), jnp.zeros(4), key)  # shape mismatch
 
 
 @pytest.mark.parametrize("h", [8.0, 10.0, 15.0, 20.0, 30.0, 40.0])
@@ -142,8 +142,8 @@ def test_multi_block_draw_is_reproducible_and_exact_in_mean():
     h = jnp.full(n, 0.6)  # h < 1: the Gamma-series branch
     z = jnp.full(n, 1.5)
     key = jax.random.PRNGKey(7)
-    a = np.asarray(pgjax.pg_sample(h, z, key))
-    b = np.asarray(pgjax.pg_sample(h, z, key))
+    a = np.asarray(augax.pg_sample(h, z, key))
+    b = np.asarray(augax.pg_sample(h, z, key))
     np.testing.assert_array_equal(a, b)
     blocks = a[: 5 * 2**16].reshape(5, 2**16)
     assert not np.array_equal(blocks[0], blocks[1])

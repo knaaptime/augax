@@ -1,4 +1,4 @@
-name: pgjax
+name: augax
 channels:
   - conda-forge
 dependencies:

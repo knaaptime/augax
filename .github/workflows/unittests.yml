@@ -47,7 +47,7 @@ jobs:
 
       - name: Test package
         run: |
-          pytest --cov src/pgjax \
+          pytest --cov src/augax \
            -v \
            -r a \
            -n auto \

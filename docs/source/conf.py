@@ -10,16 +10,16 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath("../../src"))
 
-# Mock the native C++ extension so pgjax can be imported without a build.
-sys.modules.setdefault("pgjax_cpp", MagicMock())
+# Mock the native C++ extension so augax can be imported without a build.
+sys.modules.setdefault("augax_cpp", MagicMock())
 
-import pgjax  # noqa: E402
+import augax  # noqa: E402
 
-project = "pgjax"
-copyright = "2024-, pgjax developers"  # noqa: A001
-author = "pgjax developers"
+project = "augax"
+copyright = "2024-, augax developers"  # noqa: A001
+author = "augax developers"
 
-version = pgjax.__version__
+version = augax.__version__
 release = version
 
 language = "en"
@@ -48,8 +48,8 @@ myst_enable_extensions = [
     "html_image",
 ]
 
-# Mock the native C++ extension so autodoc can import pgjax without a build.
-autodoc_mock_imports = ["pgjax_cpp"]
+# Mock the native C++ extension so autodoc can import augax without a build.
+autodoc_mock_imports = ["augax_cpp"]
 
 bibtex_bibfiles = ["_static/references.bib"]
 bibtex_reference_style = "author_year"
@@ -96,15 +96,15 @@ def linkcode_resolve(domain, info):
         import inspect
 
         fn = inspect.getsourcefile(obj)
-        fn = os.path.relpath(fn, start=os.path.dirname(pgjax.__file__))
+        fn = os.path.relpath(fn, start=os.path.dirname(augax.__file__))
         source, lineno = inspect.getsourcelines(obj)
         return fn, lineno, lineno + len(source) - 1
 
     if domain != "py" or not info["module"]:
         return None
     try:
-        filename = "pgjax/%s#L%d-L%d" % find_source()  # noqa: UP031
+        filename = "augax/%s#L%d-L%d" % find_source()  # noqa: UP031
     except Exception:
         filename = info["module"].replace(".", "/") + ".py"
     tag = "dev" if "dev" in release else ("v" + release)
-    return f"https://github.com/knaaptime/pgjax/blob/{tag}/{filename}"
+    return f"https://github.com/knaaptime/augax/blob/{tag}/{filename}"

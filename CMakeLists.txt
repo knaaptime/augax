@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(pgjax LANGUAGES CXX)
+project(augax LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,7 @@ execute_process(
 list(APPEND CMAKE_PREFIX_PATH "${NANOBIND_CMAKE_DIR}")
 find_package(nanobind REQUIRED CONFIG)
 
-nanobind_add_module(pgjax_cpp NOMINSIZE src/cpp/pgjax.cpp)
-target_include_directories(pgjax_cpp PRIVATE ${XLA_FFI_INCLUDE_DIR})
+nanobind_add_module(augax_cpp NOMINSIZE src/cpp/augax.cpp)
+target_include_directories(augax_cpp PRIVATE ${XLA_FFI_INCLUDE_DIR})
 
-install(TARGETS pgjax_cpp LIBRARY DESTINATION .)
+install(TARGETS augax_cpp LIBRARY DESTINATION .)

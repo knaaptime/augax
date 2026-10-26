@@ -1,6 +1,6 @@
-﻿pgjax.\_seed\_from\_key
+﻿augax.\_seed\_from\_key
 =======================
 
-.. currentmodule:: pgjax
+.. currentmodule:: augax
 
 .. autofunction:: _seed_from_key
