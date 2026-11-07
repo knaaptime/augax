@@ -2,8 +2,7 @@
 
 Native draws for conditionally Gaussian augmentation in JAX. Each sampler runs as an
 XLA FFI custom call inside `jit`, `vmap`, `lax.scan` and `pmap`, with no host round
-trip. It replaces `jax.pure_callback(random_polyagamma, ...)`, which pays that round
-trip on every Gibbs sweep and serializes under `pmap`.
+trip. 
 
 ```python
 import jax, augax
