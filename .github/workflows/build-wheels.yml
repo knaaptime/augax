@@ -55,7 +55,8 @@ jobs:
       # no platform needs system libraries.  jax comes from pyproject's
       # [build-system] pin -- the build is isolated, so nothing is
       # pip-installed here.  cibuildwheel v4 repairs Windows wheels with
-      # delvewheel by default.
+      # delvewheel by default, which vendors the MSVC C++ runtime, the one
+      # library ci/check_wheel.py allows.
 
       # ── Every platform: test the repaired wheel before it can publish ─────
       # The full suite runs in unittests.yml.  These checks are quick enough to run
