@@ -1,6 +1,6 @@
 # Installation
 
-`augax` supports Python >= 3.9. We recommend using [miniforge] or [pixi].
+`augax` supports Python >= 3.12. We recommend using [miniforge] or [pixi].
 
 ## Installing a released version
 
@@ -28,18 +28,17 @@ pip install -e . --no-deps
 
 ```python
 import jax
-jax.config.update("jax_enable_x64", True)
 import augax
 
-key = jax.random.PRNGKey(0)
-h = jax.numpy.ones(5)
-z = jax.numpy.zeros(5)
-print(augax.pg_sample(h, z, key))
+key = jax.random.key(0)
+print(augax.pg_sample(1.0, jax.numpy.zeros(5), key))
 ```
 
-!!! note
-    `augax` requires 64-bit mode (`jax_enable_x64 = True`). A
-    `RuntimeError` is raised if x64 is not enabled.
+```{note}
+Draws take the precision JAX is running in: `float64` under `jax_enable_x64`, and
+`float32` otherwise. The samplers compute in double precision either way, so a
+`float32` draw is the `float64` draw, rounded.
+```
 
 [miniforge]: https://github.com/conda-forge/miniforge
 [pixi]: https://pixi.sh

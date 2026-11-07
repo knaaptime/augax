@@ -1,0 +1,6 @@
+﻿augax.crt\_sample
+=================
+
+.. currentmodule:: augax
+
+.. autofunction:: crt_sample

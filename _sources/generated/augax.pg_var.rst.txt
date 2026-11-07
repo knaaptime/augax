@@ -1,0 +1,6 @@
+﻿augax.pg\_var
+=============
+
+.. currentmodule:: augax
+
+.. autofunction:: pg_var

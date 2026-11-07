@@ -1,0 +1,6 @@
+﻿augax.pg\_sample\_numpy
+=======================
+
+.. currentmodule:: augax
+
+.. autofunction:: pg_sample_numpy

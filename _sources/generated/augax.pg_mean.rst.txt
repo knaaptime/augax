@@ -1,0 +1,6 @@
+﻿augax.pg\_mean
+==============
+
+.. currentmodule:: augax
+
+.. autofunction:: pg_mean

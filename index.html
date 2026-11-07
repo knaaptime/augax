@@ -200,13 +200,14 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="api.html">API reference</a><input aria-label="Toggle navigation of API reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample.html">augax.pg_sample</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample.html">augax.ks_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.crt_sample.html">augax.crt_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.gig_sample.html">augax.gig_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample_numpy.html">augax.pg_sample_numpy</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample_numpy.html">augax.ks_sample_numpy</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._seed_from_key.html">augax._seed_from_key</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._dispatch.html">augax._dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._sample_batched.html">augax._sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_dispatch.html">augax._ks_dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_sample_batched.html">augax._ks_sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._require_x64.html">augax._require_x64</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.crt_sample_numpy.html">augax.crt_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.gig_sample_numpy.html">augax.gig_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_mean.html">augax.pg_mean</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_var.html">augax.pg_var</a></li>
 </ul>
 </li>
 </ul>
@@ -253,92 +254,246 @@
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="augax">
 <h1>augax<a class="headerlink" href="#augax" title="Link to this heading">¶</a></h1>
-<p>On-device draws for <strong>conditionally Gaussian augmentation</strong> in JAX, each an XLA
-FFI custom call: <strong>Pólya-Gamma</strong> sampling (<code class="docutils literal notranslate"><span class="pre">pg_sample</span></code>) and the <strong>Kolmogorov
-scale</strong> of the logistic’s normal scale mixture (<code class="docutils literal notranslate"><span class="pre">ks_sample</span></code>).</p>
-<p><code class="docutils literal notranslate"><span class="pre">augax.pg_sample(h,</span> <span class="pre">z,</span> <span class="pre">key)</span></code> draws <code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">~</span> <span class="pre">PG(h,</span> <span class="pre">z)</span></code> from <em>inside</em> a JIT’d /
-<code class="docutils literal notranslate"><span class="pre">lax.scan</span></code>-ed / <code class="docutils literal notranslate"><span class="pre">pmap</span></code>-ed program with <strong>no host round-trip</strong> — the native
-replacement for <code class="docutils literal notranslate"><span class="pre">jax.pure_callback(random_polyagamma,</span> <span class="pre">...)</span></code>, which pays a
-device↔host round-trip on every Pólya-Gamma Gibbs sweep and serializes under
-<code class="docutils literal notranslate"><span class="pre">jax.pmap</span></code>.</p>
+<p>Native draws for conditionally Gaussian augmentation in JAX. Each sampler runs as an
+XLA FFI custom call inside <code class="docutils literal notranslate"><span class="pre">jit</span></code>, <code class="docutils literal notranslate"><span class="pre">vmap</span></code>, <code class="docutils literal notranslate"><span class="pre">lax.scan</span></code> and <code class="docutils literal notranslate"><span class="pre">pmap</span></code>, with no host round
+trip.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span><span class="o">,</span><span class="w"> </span><span class="nn">augax</span>
-<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 
 <span class="nd">@jax</span><span class="o">.</span><span class="n">jit</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">omega_update</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
-    <span class="k">return</span> <span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">omega_update</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span>
 </pre></div>
 </div>
-<section id="method">
-<h2>Method<a class="headerlink" href="#method" title="Link to this heading">¶</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">pg_sample</span></code> follows the hybrid dispatch of
-<a class="reference external" href="https://github.com/zoj613/polyagamma"><code class="docutils literal notranslate"><span class="pre">zoj613/polyagamma</span></code></a> (<code class="docutils literal notranslate"><span class="pre">method=None</span></code>),
-changed where that scheme is measurably biased:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Sampler</p></th>
+<th class="head"><p>Draws</p></th>
+<th class="head"><p>Augments</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">pg_sample(h,</span> <span class="pre">z,</span> <span class="pre">key)</span></code></p></td>
+<td><p>Pólya-Gamma, <code class="docutils literal notranslate"><span class="pre">PG(h,</span> <span class="pre">z)</span></code></p></td>
+<td><p>logit and negative-binomial likelihoods</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ks_sample(u,</span> <span class="pre">key)</span></code></p></td>
+<td><p>the Kolmogorov scale given a logistic disturbance</p></td>
+<td><p>a logistic latent variable</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">crt_sample(y,</span> <span class="pre">r,</span> <span class="pre">key)</span></code></p></td>
+<td><p>the Chinese restaurant table count</p></td>
+<td><p>a negative-binomial dispersion</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">gig_sample(p,</span> <span class="pre">a,</span> <span class="pre">b,</span> <span class="pre">key)</span></code></p></td>
+<td><p>the generalized inverse Gaussian</p></td>
+<td><p>the lasso, quantile regression, generalized hyperbolic models</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Each has a <code class="docutils literal notranslate"><span class="pre">*_numpy</span></code> twin that takes a <code class="docutils literal notranslate"><span class="pre">numpy.random.Generator</span></code> and makes the same
+draws for host callers. <code class="docutils literal notranslate"><span class="pre">pg_mean</span></code> and <code class="docutils literal notranslate"><span class="pre">pg_var</span></code> give the Pólya-Gamma moments in closed
+form, stable at <code class="docutils literal notranslate"><span class="pre">z</span> <span class="pre">=</span> <span class="pre">0</span></code> and differentiable, for EM and variational updates.</p>
+<p>Parameters broadcast against one another, and <code class="docutils literal notranslate"><span class="pre">shape=</span></code> sets the shape of the result.
+An invalid parameter draws NaN, so a diverged chain stays visible. Draws take the
+precision JAX is running in: <code class="docutils literal notranslate"><span class="pre">float64</span></code> under <code class="docutils literal notranslate"><span class="pre">jax_enable_x64</span></code>, and <code class="docutils literal notranslate"><span class="pre">float32</span></code>
+otherwise. The samplers compute in double precision either way.</p>
+<section id="polya-gamma">
+<h2>Pólya-Gamma<a class="headerlink" href="#polya-gamma" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">pg_sample</span></code> chooses a sampler for each element from <code class="docutils literal notranslate"><span class="pre">(h,</span> <span class="pre">z)</span></code>. The first row that
+applies wins:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Where</p></th>
+<th class="head"><p>Sampler</p></th>
+<th class="head"><p>Accuracy</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">|z|</span> <span class="pre">&gt;=</span> <span class="pre">15</span> <span class="pre">+</span> <span class="pre">log(max(h,</span> <span class="pre">1))</span></code></p></td>
+<td><p>inverse Gaussian</p></td>
+<td><p>Kolmogorov distance below <code class="docutils literal notranslate"><span class="pre">3.4e-7</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>integer <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&lt;=</span> <span class="pre">4</span></code></p></td>
+<td><p>Devroye (Polson, Scott &amp; Windle 2013), summed <code class="docutils literal notranslate"><span class="pre">h</span></code> times</p></td>
+<td><p>exact</p></td>
+</tr>
+<tr class="row-even"><td><p>otherwise</p></td>
+<td><p>sum of gammas</p></td>
+<td><p>Kolmogorov distance below <code class="docutils literal notranslate"><span class="pre">1e-6</span></code> for <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;=</span> <span class="pre">0.03</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Draws are floored at <code class="docutils literal notranslate"><span class="pre">1e-12</span></code>, so that they are usable as precisions.</p>
+<p>At large <code class="docutils literal notranslate"><span class="pre">|z|</span></code>, <code class="docutils literal notranslate"><span class="pre">PG(h,</span> <span class="pre">z)</span></code> is an inverse Gaussian. Its cumulant generating function is
+<code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">(r</span> <span class="pre">-</span> <span class="pre">r')</span> <span class="pre">+</span> <span class="pre">h</span> <span class="pre">(log1p(exp(-2</span> <span class="pre">r))</span> <span class="pre">-</span> <span class="pre">log1p(exp(-2</span> <span class="pre">r')))</span></code>, with <code class="docutils literal notranslate"><span class="pre">r</span> <span class="pre">=</span> <span class="pre">|z|</span> <span class="pre">/</span> <span class="pre">2</span></code> and
+<code class="docutils literal notranslate"><span class="pre">r'</span> <span class="pre">=</span> <span class="pre">sqrt(r^2</span> <span class="pre">-</span> <span class="pre">w</span> <span class="pre">/</span> <span class="pre">2)</span></code>. The first term is that of <code class="docutils literal notranslate"><span class="pre">IG(h</span> <span class="pre">/</span> <span class="pre">(2</span> <span class="pre">|z|),</span> <span class="pre">h^2</span> <span class="pre">/</span> <span class="pre">4)</span></code>, and the
+second is at most <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">exp(-|z|)</span></code>. One normal and one uniform therefore draw it for any
+<code class="docutils literal notranslate"><span class="pre">h</span></code>, and the other samplers need not handle large <code class="docutils literal notranslate"><span class="pre">|z|</span></code> at all.</p>
+<p>Elsewhere <code class="docutils literal notranslate"><span class="pre">pg_sample</span></code> uses the representation of <code class="docutils literal notranslate"><span class="pre">PG</span></code> as an infinite sum of gammas,
+<code class="docutils literal notranslate"><span class="pre">omega</span> <span class="pre">=</span> <span class="pre">sum_k</span> <span class="pre">w_k</span> <span class="pre">G_k</span></code> with <code class="docutils literal notranslate"><span class="pre">G_k</span> <span class="pre">~</span> <span class="pre">Gamma(h,</span> <span class="pre">1)</span></code> (Polson, Scott &amp; Windle 2013). It draws the
+first <code class="docutils literal notranslate"><span class="pre">K</span></code> terms and replaces the rest with a shifted inverse Gaussian matched to their
+first three cumulants. The inverse Gaussian suits the remainder because the weights fall
+as <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">k^2</span></code>, which gives its Levy density the same <code class="docutils literal notranslate"><span class="pre">x^(-3/2)</span></code> behaviour near zero, and it
+is the same law the whole sum tends to at large <code class="docutils literal notranslate"><span class="pre">|z|</span></code>.</p>
+<p>The characteristic functions of this approximation and of <code class="docutils literal notranslate"><span class="pre">PG</span></code> are both in closed form,
+which bounds the Kolmogorov distance between them with no sampling noise. <code class="docutils literal notranslate"><span class="pre">K</span></code> is set from
+<code class="docutils literal notranslate"><span class="pre">h</span></code> to hold that bound below <code class="docutils literal notranslate"><span class="pre">1e-6</span></code> at every <code class="docutils literal notranslate"><span class="pre">|z|</span></code>, and the test suite recomputes it. A
+sample of <code class="docutils literal notranslate"><span class="pre">n</span></code> draws detects a distance near <code class="docutils literal notranslate"><span class="pre">1.6</span> <span class="pre">/</span> <span class="pre">sqrt(n)</span></code>, so <code class="docutils literal notranslate"><span class="pre">1e-6</span></code> needs about
+<code class="docutils literal notranslate"><span class="pre">3e12</span></code> draws at a single <code class="docutils literal notranslate"><span class="pre">(h,</span> <span class="pre">z)</span></code>.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">h</span></code></p></th>
+<th class="head"><p>0.05</p></th>
+<th class="head"><p>0.1</p></th>
+<th class="head"><p>0.2</p></th>
+<th class="head"><p>0.5</p></th>
+<th class="head"><p>0.9</p></th>
+<th class="head"><p>1.5</p></th>
+<th class="head"><p>2.5</p></th>
+<th class="head"><p>4 to 6</p></th>
+<th class="head"><p>6 to 20</p></th>
+<th class="head"><p>20 to 65</p></th>
+<th class="head"><p>65 to 200</p></th>
+<th class="head"><p>200 to 400</p></th>
+<th class="head"><p>above 400</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">K</span></code></p></td>
+<td><p>85</p></td>
+<td><p>45</p></td>
+<td><p>25</p></td>
+<td><p>13</p></td>
+<td><p>10</p></td>
+<td><p>8</p></td>
+<td><p>7</p></td>
+<td><p>6</p></td>
+<td><p>5</p></td>
+<td><p>4</p></td>
+<td><p>3</p></td>
+<td><p>2</p></td>
+<td><p>1</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Small <code class="docutils literal notranslate"><span class="pre">h</span></code> is the costly end, because the remainder then has to span many scales. <code class="docutils literal notranslate"><span class="pre">K</span></code> stops
+at 128, near <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">0.03</span></code>, and the bound no longer holds below that. Against a 512-term
+series, 16M draws detect no difference at <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">0.01</span></code>. At <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">0.005</span></code> the distance is
+<code class="docutils literal notranslate"><span class="pre">2e-3</span></code>, at <code class="docutils literal notranslate"><span class="pre">omega</span></code> near <code class="docutils literal notranslate"><span class="pre">1e-6</span></code>, against a standard deviation of <code class="docutils literal notranslate"><span class="pre">0.01</span></code>.</p>
+<p>The test suite also checks every regime against the exact Laplace transform,
+<code class="docutils literal notranslate"><span class="pre">E[exp(-t</span> <span class="pre">omega)]</span> <span class="pre">=</span> <span class="pre">[cosh(z</span> <span class="pre">/</span> <span class="pre">2)</span> <span class="pre">/</span> <span class="pre">cosh(sqrt(z^2</span> <span class="pre">/</span> <span class="pre">4</span> <span class="pre">+</span> <span class="pre">t</span> <span class="pre">/</span> <span class="pre">2))]^h</span></code>, on real draws. It
+reaches scales of <code class="docutils literal notranslate"><span class="pre">omega</span></code> far below the standard deviation, and needs no reference
+sampler.</p>
+<p>The widely used <a class="reference external" href="https://github.com/zoj613/polyagamma"><code class="docutils literal notranslate"><span class="pre">polyagamma</span></code></a> 2.0.2 is measurably
+biased in several regimes, as checked with 8M draws against the exact mean and variance:</p>
 <ul class="simple">
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;</span> <span class="pre">50</span></code></strong>: a normal with the exact Pólya-Gamma mean and variance.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">8</span> <span class="pre">&lt;=</span> <span class="pre">h</span> <span class="pre">&lt;=</span> <span class="pre">50</span></code></strong>: the <strong>saddlepoint</strong> rejection sampler (Windle, Polson &amp;
-Scott 2014, arXiv:1405.0506), O(1) per accepted draw.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">1</span></code></strong> (Bernoulli/logit), <strong>or integer <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&lt;=</span> <span class="pre">4</span></code> with <code class="docutils literal notranslate"><span class="pre">|z|</span> <span class="pre">&lt;=</span> <span class="pre">1</span></code></strong>: the
-exact <strong>Devroye</strong> sampler for <code class="docutils literal notranslate"><span class="pre">PG(1,</span> <span class="pre">z)</span></code> (Polson, Scott &amp; Windle 2013), summed
-<code class="docutils literal notranslate"><span class="pre">h</span></code> times.</p></li>
-<li><p><strong>Otherwise, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">&lt;</span> <span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">8</span></code></strong> — e.g. Negative-Binomial <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">y</span> <span class="pre">+</span> <span class="pre">alpha</span></code>: the
-<strong>alternate</strong> sampler (Windle, Polson &amp; Scott 2014, Section 4).</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">1</span></code></strong>: the Gamma-series representation — 20 terms plus a remainder
-matched in mean and variance — exact in both moments.</p></li>
+<li><p>Its alternate sampler (Windle, Polson &amp; Scott 2014), <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">&lt;</span> <span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">4</span></code>, small <code class="docutils literal notranslate"><span class="pre">|z|</span></code>: up to
+0.9% high in the mean and 5.5% high in the variance. Its right-hand envelope uses the
+constant <code class="docutils literal notranslate"><span class="pre">(pi</span> <span class="pre">/</span> <span class="pre">2)^(h</span> <span class="pre">/</span> <span class="pre">2)</span></code>, where both its gamma proposal and the density’s tail carry
+<code class="docutils literal notranslate"><span class="pre">(pi</span> <span class="pre">/</span> <span class="pre">2)^h</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">1</span></code>: the alternate method assumes <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;=</span> <span class="pre">1</span></code>, and below it <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> runs up to
+0.7% low in the mean and 1.2% low in the variance.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">&lt;</span> <span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">8</span></code> with <code class="docutils literal notranslate"><span class="pre">|z|</span> <span class="pre">&lt;=</span> <span class="pre">4</span></code>: its saddlepoint approximation runs 2.2% low in the variance
+at <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">4.5</span></code> and under 0.5% low from <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">6</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;</span> <span class="pre">50</span></code>: its normal has none of the law’s skewness, which is <code class="docutils literal notranslate"><span class="pre">0.27</span></code> at <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">51</span></code>.</p></li>
 </ul>
-<p>Each departure from <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> 2.0.2 removes a bias measured with 2M draws
-against the exact mean and variance:</p>
-<ul class="simple">
-<li><p><strong>Alternate sampler, <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">&lt;</span> <span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">4</span></code>, small <code class="docutils literal notranslate"><span class="pre">|z|</span></code></strong>: <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> runs +0.4–0.9% in
-the mean and +1–5% in the variance. Its right-hand envelope uses the constant
-<code class="docutils literal notranslate"><span class="pre">(π/2)^(h/2)</span></code>, where both its Gamma proposal and the density’s tail carry
-<code class="docutils literal notranslate"><span class="pre">(π/2)^h</span></code>; augax uses the latter.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">1</span></code></strong>: the alternate method assumes <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;=</span> <span class="pre">1</span></code>; below it <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> runs
-−0.4–0.8% in the mean. augax uses the Gamma series.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">&lt;</span> <span class="pre">h</span> <span class="pre">&lt;</span> <span class="pre">8</span></code> with <code class="docutils literal notranslate"><span class="pre">|z|</span> <span class="pre">&lt;=</span> <span class="pre">4</span></code></strong>: <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> uses the saddlepoint
-approximation, 1–2% low in the variance. augax uses the exact alternate
-sampler.</p></li>
-</ul>
-<p>The saddlepoint and alternate samplers are ported from <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code>
-(BSD-3-Clause). Every regime is tested against the closed-form mean and
-variance.</p>
-<p>The RNG is a per-call <code class="docutils literal notranslate"><span class="pre">xoshiro256**</span></code> seeded (via <code class="docutils literal notranslate"><span class="pre">splitmix64</span></code>) from the JAX PRNG
-key, so draws are reproducible and each call owns its stream — safe when several
-threads call at once. Normals and exponentials come from ziggurat samplers.</p>
-<p>An array longer than 65,536 elements is split into blocks of that size, each
-with its own stream, and the blocks are drawn in parallel on every hardware
-thread (set <code class="docutils literal notranslate"><span class="pre">AUGAX_NUM_THREADS</span></code> to cap it). The blocks depend only on the array
-length, so a draw is the same on any machine and any thread count. On a large
-Negative-Binomial model (8.1M cells) this takes the draw from 3.6 s to 0.33 s on
-16 threads.</p>
 </section>
 <section id="the-kolmogorov-scale">
 <h2>The Kolmogorov scale<a class="headerlink" href="#the-kolmogorov-scale" title="Link to this heading">¶</a></h2>
-<p>A standard logistic disturbance is a normal scale mixture,
-<code class="docutils literal notranslate"><span class="pre">eps</span> <span class="pre">|</span> <span class="pre">lam</span> <span class="pre">~</span> <span class="pre">N(0,</span> <span class="pre">lam^2)</span></code> with <code class="docutils literal notranslate"><span class="pre">lam</span> <span class="pre">=</span> <span class="pre">2K</span></code> and <code class="docutils literal notranslate"><span class="pre">K</span></code> Kolmogorov distributed
-(Stefanski 1991). <code class="docutils literal notranslate"><span class="pre">ks_sample(u,</span> <span class="pre">key)</span></code> draws <code class="docutils literal notranslate"><span class="pre">lam</span></code> given <code class="docutils literal notranslate"><span class="pre">eps</span> <span class="pre">=</span> <span class="pre">u</span></code>, which makes a
-logistic latent variable conditionally Gaussian: the propagated disturbance of a
-latent SAR logit, for one. The draw is exact: <code class="docutils literal notranslate"><span class="pre">1/lam^2</span></code> is proposed from an
-inverse Gaussian, <code class="docutils literal notranslate"><span class="pre">IG(1/|u|,</span> <span class="pre">1)</span></code> (a chi-square at <code class="docutils literal notranslate"><span class="pre">|u|</span> <span class="pre">&lt;</span> <span class="pre">1e-4</span></code>), and accepted
-with probability <code class="docutils literal notranslate"><span class="pre">S(v)</span> <span class="pre">=</span> <span class="pre">f(v)</span> <span class="pre">e^{v/2}</span> <span class="pre">&lt;=</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">f</span></code> the density of <code class="docutils literal notranslate"><span class="pre">(2K)^2</span></code>,
-evaluated lazily by the squeeze of an alternating series — the Kolmogorov
-series above <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">4/3</span></code> and its Jacobi transform below, where the first’s
-partial sums are not bounds (Holmes &amp; Held 2006). It is checked against the
-identity <code class="docutils literal notranslate"><span class="pre">E[exp(-t^2</span> <span class="pre">lam^2</span> <span class="pre">/</span> <span class="pre">2)]</span> <span class="pre">=</span> <span class="pre">pi</span> <span class="pre">t</span> <span class="pre">/</span> <span class="pre">sinh(pi</span> <span class="pre">t)</span></code> and against the
-posterior moments by quadrature. <code class="docutils literal notranslate"><span class="pre">ks_sample_numpy(u,</span> <span class="pre">rng)</span></code> is the same C++
-sampler for host callers.</p>
+<p>A standard logistic disturbance is a normal scale mixture, <code class="docutils literal notranslate"><span class="pre">eps</span> <span class="pre">|</span> <span class="pre">lam</span> <span class="pre">~</span> <span class="pre">N(0,</span> <span class="pre">lam^2)</span></code>
+with <code class="docutils literal notranslate"><span class="pre">lam</span> <span class="pre">=</span> <span class="pre">2K</span></code> and <code class="docutils literal notranslate"><span class="pre">K</span></code> Kolmogorov distributed (Stefanski 1991). <code class="docutils literal notranslate"><span class="pre">ks_sample(u,</span> <span class="pre">key)</span></code>
+draws <code class="docutils literal notranslate"><span class="pre">lam</span></code> given <code class="docutils literal notranslate"><span class="pre">eps</span> <span class="pre">=</span> <span class="pre">u</span></code>, which makes a logistic latent variable conditionally
+Gaussian: the propagated disturbance of a latent SAR logit, for one. The draw is exact.
+It proposes <code class="docutils literal notranslate"><span class="pre">1/lam^2</span></code> from an inverse Gaussian, <code class="docutils literal notranslate"><span class="pre">IG(1/|u|,</span> <span class="pre">1)</span></code> (a chi-square at
+<code class="docutils literal notranslate"><span class="pre">|u|</span> <span class="pre">&lt;</span> <span class="pre">1e-4</span></code>), and accepts with probability <code class="docutils literal notranslate"><span class="pre">S(v)</span> <span class="pre">=</span> <span class="pre">f(v)</span> <span class="pre">e^{v/2}</span> <span class="pre">&lt;=</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">f</span></code> the density
+of <code class="docutils literal notranslate"><span class="pre">(2K)^2</span></code>, evaluated lazily by the squeeze of an alternating series: the Kolmogorov
+series above <code class="docutils literal notranslate"><span class="pre">v</span> <span class="pre">=</span> <span class="pre">4/3</span></code> and its Jacobi transform below, where the first’s partial sums
+are not bounds (Holmes &amp; Held 2006). The tests check it against the identity
+<code class="docutils literal notranslate"><span class="pre">E[exp(-t^2</span> <span class="pre">lam^2</span> <span class="pre">/</span> <span class="pre">2)]</span> <span class="pre">=</span> <span class="pre">pi</span> <span class="pre">t</span> <span class="pre">/</span> <span class="pre">sinh(pi</span> <span class="pre">t)</span></code> and against the posterior moments by
+quadrature.</p>
 </section>
-<section id="status">
-<h2>Status<a class="headerlink" href="#status" title="Link to this heading">¶</a></h2>
-<ul class="simple">
-<li><p>✅ All <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>: the logit (<code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">1</span></code>), Negative-Binomial (<code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">y</span> <span class="pre">+</span> <span class="pre">alpha</span></code>) and
-large-shape regimes.</p></li>
-<li><p>Dispatch is automatic: the sampler is selected from <code class="docutils literal notranslate"><span class="pre">(h,</span> <span class="pre">z)</span></code> with no API
-change.</p></li>
-<li><p>✅ <code class="docutils literal notranslate"><span class="pre">ks_sample</span></code>: exact for every <code class="docutils literal notranslate"><span class="pre">u</span></code>, on the device and on the host.</p></li>
-</ul>
-<p>CPU-only (the sampler is cheap scalar work; the point is to keep it on-device
-next to the rest of a JIT’d Gibbs sweep).</p>
+<section id="the-chinese-restaurant-table-count">
+<h2>The Chinese restaurant table count<a class="headerlink" href="#the-chinese-restaurant-table-count" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">crt_sample(y,</span> <span class="pre">r,</span> <span class="pre">key)</span></code> draws <code class="docutils literal notranslate"><span class="pre">L</span> <span class="pre">=</span> <span class="pre">sum_{n=0}^{y-1}</span> <span class="pre">Bernoulli(r</span> <span class="pre">/</span> <span class="pre">(r</span> <span class="pre">+</span> <span class="pre">n))</span></code>, the tables
+that <code class="docutils literal notranslate"><span class="pre">y</span></code> customers occupy at concentration <code class="docutils literal notranslate"><span class="pre">r</span></code>. With it, a negative-binomial dispersion
+has a conjugate gamma update (Zhou &amp; Carin 2015), the companion to <code class="docutils literal notranslate"><span class="pre">pg_sample</span></code> at
+<code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">y</span> <span class="pre">+</span> <span class="pre">r</span></code>. The draw is exact. It draws the large probabilities one at a time and thins
+the small ones by geometric jumps, so its cost grows with <code class="docutils literal notranslate"><span class="pre">min(y,</span> <span class="pre">r)</span></code> and hardly at all
+with <code class="docutils literal notranslate"><span class="pre">y</span></code> beyond that. Counts and tables are in floating point, integer-valued.</p>
+</section>
+<section id="the-generalized-inverse-gaussian">
+<h2>The generalized inverse Gaussian<a class="headerlink" href="#the-generalized-inverse-gaussian" title="Link to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">gig_sample(p,</span> <span class="pre">a,</span> <span class="pre">b,</span> <span class="pre">key)</span></code> draws from the density proportional to
+<code class="docutils literal notranslate"><span class="pre">x^(p-1)</span> <span class="pre">exp(-(a</span> <span class="pre">x</span> <span class="pre">+</span> <span class="pre">b</span> <span class="pre">/</span> <span class="pre">x)</span> <span class="pre">/</span> <span class="pre">2)</span></code>. On the log scale, centred at the mode, this density
+is log-concave for every parameter, so a single rejection sampler serves them all
+(Devroye 2014). <code class="docutils literal notranslate"><span class="pre">b</span> <span class="pre">=</span> <span class="pre">0</span></code> with <code class="docutils literal notranslate"><span class="pre">p</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> gives the gamma, and <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">=</span> <span class="pre">0</span></code> with <code class="docutils literal notranslate"><span class="pre">p</span> <span class="pre">&lt;</span> <span class="pre">0</span></code> the
+inverse gamma.</p>
+</section>
+<section id="threads-and-reproducibility">
+<h2>Threads and reproducibility<a class="headerlink" href="#threads-and-reproducibility" title="Link to this heading">¶</a></h2>
+<p>A key’s elements form one stream, or one stream per block of 65,536 if there are more.
+Any free thread takes the next stream, on XLA’s thread pool for native calls and on
+threads of their own for NumPy calls. Chains under <code class="docutils literal notranslate"><span class="pre">vmap</span></code> therefore parallelize as one
+long array does. Set <code class="docutils literal notranslate"><span class="pre">AUGAX_NUM_THREADS</span></code> to cap the threads.</p>
+<p>A draw depends on the key and the number of elements alone. The thread count does not
+change it, and <code class="docutils literal notranslate"><span class="pre">vmap(f)(keys)[i]</span></code> equals <code class="docutils literal notranslate"><span class="pre">f(keys[i])</span></code>. As in <code class="docutils literal notranslate"><span class="pre">jax.random</span></code>, closing over
+one key under <code class="docutils literal notranslate"><span class="pre">vmap</span></code> gives every row the same draws, so split keys per chain. augax does
+not promise equal draws across builds or machines: its rejection steps compare the
+results of the math library, whose last bits vary by platform.</p>
+<p>Single-threaded cost on an Apple M-series core, against <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> 2.0.2, for <code class="docutils literal notranslate"><span class="pre">z</span></code>
+drawn from <code class="docutils literal notranslate"><span class="pre">N(0,</span> <span class="pre">1.5^2)</span></code>:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">h</span></code></p></th>
+<th class="head"><p>0.05</p></th>
+<th class="head"><p>0.5</p></th>
+<th class="head"><p>1</p></th>
+<th class="head"><p>2.5</p></th>
+<th class="head"><p>6.5</p></th>
+<th class="head"><p>10</p></th>
+<th class="head"><p>50</p></th>
+<th class="head"><p>1000</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>augax (ns/draw)</p></td>
+<td><p>1140</p></td>
+<td><p>199</p></td>
+<td><p>59</p></td>
+<td><p>103</p></td>
+<td><p>83</p></td>
+<td><p>83</p></td>
+<td><p>74</p></td>
+<td><p>40</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> (ns/draw)</p></td>
+<td><p>193</p></td>
+<td><p>116</p></td>
+<td><p>68</p></td>
+<td><p>183</p></td>
+<td><p>490</p></td>
+<td><p>487</p></td>
+<td><p>458</p></td>
+<td><p>16</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The comparison flatters <code class="docutils literal notranslate"><span class="pre">polyagamma</span></code> wherever it carries the biases above: at small <code class="docutils literal notranslate"><span class="pre">h</span></code>,
+and at <code class="docutils literal notranslate"><span class="pre">h</span> <span class="pre">=</span> <span class="pre">1000</span></code>, where its draw is a normal.</p>
+</section>
+<section id="platforms">
+<h2>Platforms<a class="headerlink" href="#platforms" title="Link to this heading">¶</a></h2>
+<p>The FFI target exists on CPU, where the point is to keep this cheap scalar work next to
+the rest of a JIT’d Gibbs sweep. On any other platform the same call compiles to a host
+callback instead, which makes the same draws at the price of the round trip.</p>
 <div class="toctree-wrapper compound">
 </div>
 <div class="toctree-wrapper compound">
@@ -367,7 +522,7 @@ next to the rest of a JIT’d Gibbs sweep).</p>
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2024-, augax developers
+                Copyright &#169; 2026-, augax developers
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -394,9 +549,12 @@ next to the rest of a JIT’d Gibbs sweep).</p>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">augax</a><ul>
-<li><a class="reference internal" href="#method">Method</a></li>
+<li><a class="reference internal" href="#polya-gamma">Pólya-Gamma</a></li>
 <li><a class="reference internal" href="#the-kolmogorov-scale">The Kolmogorov scale</a></li>
-<li><a class="reference internal" href="#status">Status</a><ul>
+<li><a class="reference internal" href="#the-chinese-restaurant-table-count">The Chinese restaurant table count</a></li>
+<li><a class="reference internal" href="#the-generalized-inverse-gaussian">The generalized inverse Gaussian</a></li>
+<li><a class="reference internal" href="#threads-and-reproducibility">Threads and reproducibility</a></li>
+<li><a class="reference internal" href="#platforms">Platforms</a><ul>
 </ul>
 </li>
 </ul>
@@ -410,7 +568,7 @@ next to the rest of a JIT’d Gibbs sweep).</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=e259d695"></script>
+</div><script src="_static/documentation_options.js?v=6c02275b"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

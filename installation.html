@@ -200,13 +200,14 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="api.html">API reference</a><input aria-label="Toggle navigation of API reference" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample.html">augax.pg_sample</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample.html">augax.ks_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.crt_sample.html">augax.crt_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.gig_sample.html">augax.gig_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_sample_numpy.html">augax.pg_sample_numpy</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/augax.ks_sample_numpy.html">augax.ks_sample_numpy</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._seed_from_key.html">augax._seed_from_key</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._dispatch.html">augax._dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._sample_batched.html">augax._sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_dispatch.html">augax._ks_dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._ks_sample_batched.html">augax._ks_sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="generated/augax._require_x64.html">augax._require_x64</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.crt_sample_numpy.html">augax.crt_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.gig_sample_numpy.html">augax.gig_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_mean.html">augax.pg_mean</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/augax.pg_var.html">augax.pg_var</a></li>
 </ul>
 </li>
 </ul>
@@ -253,7 +254,7 @@
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="installation">
 <h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
-<p><code class="docutils literal notranslate"><span class="pre">augax</span></code> supports Python &gt;= 3.9. We recommend using <a class="reference external" href="https://github.com/conda-forge/miniforge">miniforge</a> or <a class="reference external" href="https://pixi.sh">pixi</a>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">augax</span></code> supports Python &gt;= 3.12. We recommend using <a class="reference external" href="https://github.com/conda-forge/miniforge">miniforge</a> or <a class="reference external" href="https://pixi.sh">pixi</a>.</p>
 <section id="installing-a-released-version">
 <h2>Installing a released version<a class="headerlink" href="#installing-a-released-version" title="Link to this heading">¶</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">augax</span></code> is available on PyPI and can be installed with:</p>
@@ -276,18 +277,18 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <section id="verifying-the-installation">
 <h2>Verifying the installation<a class="headerlink" href="#verifying-the-installation" title="Link to this heading">¶</a></h2>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
-<span class="n">jax</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="s2">"jax_enable_x64"</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">augax</span>
 
-<span class="n">key</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">PRNGKey</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">h</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">numpy</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
-<span class="n">z</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">numpy</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="n">h</span><span class="p">,</span> <span class="n">z</span><span class="p">,</span> <span class="n">key</span><span class="p">))</span>
+<span class="n">key</span> <span class="o">=</span> <span class="n">jax</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">key</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">augax</span><span class="o">.</span><span class="n">pg_sample</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">jax</span><span class="o">.</span><span class="n">numpy</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span> <span class="n">key</span><span class="p">))</span>
 </pre></div>
 </div>
-<p>!!! note
-<code class="docutils literal notranslate"><span class="pre">augax</span></code> requires 64-bit mode (<code class="docutils literal notranslate"><span class="pre">jax_enable_x64</span> <span class="pre">=</span> <span class="pre">True</span></code>). A
-<code class="docutils literal notranslate"><span class="pre">RuntimeError</span></code> is raised if x64 is not enabled.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Draws take the precision JAX is running in: <code class="docutils literal notranslate"><span class="pre">float64</span></code> under <code class="docutils literal notranslate"><span class="pre">jax_enable_x64</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">float32</span></code> otherwise. The samplers compute in double precision either way, so a
+<code class="docutils literal notranslate"><span class="pre">float32</span></code> draw is the <code class="docutils literal notranslate"><span class="pre">float64</span></code> draw, rounded.</p>
+</div>
 </section>
 </section>
 
@@ -320,7 +321,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2024-, augax developers
+                Copyright &#169; 2026-, augax developers
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -361,7 +362,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=e259d695"></script>
+</div><script src="_static/documentation_options.js?v=6c02275b"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>

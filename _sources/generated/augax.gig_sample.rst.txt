@@ -1,0 +1,6 @@
+﻿augax.gig\_sample
+=================
+
+.. currentmodule:: augax
+
+.. autofunction:: gig_sample

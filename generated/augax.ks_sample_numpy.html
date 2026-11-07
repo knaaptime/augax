@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="augax._seed_from_key" href="augax._seed_from_key.html"><link rel="prev" title="augax.ks_sample" href="augax.ks_sample.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="augax.crt_sample_numpy" href="augax.crt_sample_numpy.html"><link rel="prev" title="augax.pg_sample_numpy" href="augax.pg_sample_numpy.html">
 
     <!-- Generated with Sphinx 9.2.0 and Furo 2025.12.19 -->
         <title>augax.ks_sample_numpy - augax</title>
@@ -200,13 +200,14 @@
 <li class="toctree-l1 current has-children"><a class="reference internal" href="../api.html">API reference</a><input aria-label="Toggle navigation of API reference" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="augax.pg_sample.html">augax.pg_sample</a></li>
 <li class="toctree-l2"><a class="reference internal" href="augax.ks_sample.html">augax.ks_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.crt_sample.html">augax.crt_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.gig_sample.html">augax.gig_sample</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.pg_sample_numpy.html">augax.pg_sample_numpy</a></li>
 <li class="toctree-l2 current current-page"><a class="current reference internal" href="#">augax.ks_sample_numpy</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._seed_from_key.html">augax._seed_from_key</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._dispatch.html">augax._dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._sample_batched.html">augax._sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._ks_dispatch.html">augax._ks_dispatch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._ks_sample_batched.html">augax._ks_sample_batched</a></li>
-<li class="toctree-l2"><a class="reference internal" href="augax._require_x64.html">augax._require_x64</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.crt_sample_numpy.html">augax.crt_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.gig_sample_numpy.html">augax.gig_sample_numpy</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.pg_mean.html">augax.pg_mean</a></li>
+<li class="toctree-l2"><a class="reference internal" href="augax.pg_var.html">augax.pg_var</a></li>
 </ul>
 </li>
 </ul>
@@ -255,22 +256,8 @@
 <h1>augax.ks_sample_numpy<a class="headerlink" href="#augax-ks-sample-numpy" title="Link to this heading">¶</a></h1>
 <dl class="py function">
 <dt class="sig sig-object py" id="augax.ks_sample_numpy">
-<span class="sig-prename descclassname"><span class="pre">augax.</span></span><span class="sig-name descname"><span class="pre">ks_sample_numpy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">u</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/augax/blob/v0.3.0/augax/__init__.py#L242-L259"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#augax.ks_sample_numpy" title="Link to this definition">¶</a></dt>
-<dd><p><a class="reference internal" href="augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample()</span></code></a> on the host: the same sampler, for NumPy callers.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>u</strong> (<em>array_like</em>) – The disturbances, any shape, as float64.</p></li>
-<li><p><strong>rng</strong> (<a class="reference external" href="https://numpy.org/doc/stable/reference/random/generator.html#numpy.random.Generator" title="(in NumPy v2.5)"><em>numpy.random.Generator</em></a>) – Supplies the seed of the C++ stream.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p><strong>lam</strong> – The scales, with the shape of <code class="docutils literal notranslate"><span class="pre">u</span></code>.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)">numpy.ndarray</a></p>
-</dd>
-</dl>
+<span class="sig-prename descclassname"><span class="pre">augax.</span></span><span class="sig-name descname"><span class="pre">ks_sample_numpy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">u</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span></em>, <em class="sig-param"><span class="keyword-only-separator o"><abbr title="Keyword-only parameters separator (PEP 3102)"><span class="pre">*</span></abbr></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference external" href="https://github.com/knaaptime/augax/blob/v0.4.0/augax/__init__.py#L264-L268"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#augax.ks_sample_numpy" title="Link to this definition">¶</a></dt>
+<dd><p><a class="reference internal" href="augax.ks_sample.html#augax.ks_sample" title="augax.ks_sample"><code class="xref py py-func docutils literal notranslate"><span class="pre">ks_sample()</span></code></a> on the host, with its seed drawn from <code class="docutils literal notranslate"><span class="pre">rng</span></code>.</p>
 </dd></dl>
 
 </section>
@@ -280,23 +267,23 @@
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="augax._seed_from_key.html">
+          <a class="next-page" href="augax.crt_sample_numpy.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">augax._seed_from_key</div>
+                <div class="title">augax.crt_sample_numpy</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="augax.ks_sample.html">
+          <a class="prev-page" href="augax.pg_sample_numpy.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">augax.ks_sample</div>
+                <div class="title">augax.pg_sample_numpy</div>
                 
               </div>
             </a>
@@ -304,7 +291,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2024-, augax developers
+                Copyright &#169; 2026-, augax developers
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -343,7 +330,7 @@
       
     </aside>
   </div>
-</div><script src="../_static/documentation_options.js?v=e259d695"></script>
+</div><script src="../_static/documentation_options.js?v=6c02275b"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

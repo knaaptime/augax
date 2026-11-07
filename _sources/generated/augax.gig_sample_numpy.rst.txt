@@ -1,0 +1,6 @@
+﻿augax.gig\_sample\_numpy
+========================
+
+.. currentmodule:: augax
+
+.. autofunction:: gig_sample_numpy

@@ -1,0 +1,6 @@
+﻿augax.crt\_sample\_numpy
+========================
+
+.. currentmodule:: augax
+
+.. autofunction:: crt_sample_numpy
