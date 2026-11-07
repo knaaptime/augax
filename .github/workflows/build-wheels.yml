@@ -10,8 +10,7 @@ jobs:
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
     permissions:
-      id-token: write # MANDATORY for trusted publishing to PyPI
-      contents: write # MANDATORY for the GitHub release action
+      contents: read # only the publish job below holds publishing rights
     strategy:
       fail-fast: false
       matrix:
@@ -30,16 +29,13 @@ jobs:
           - os: macos-15
             arch: arm64
             macosx_deployment_target: "15.0"
-          # Windows x86_64 -- pinned rather than windows-latest, since
-          # windows-latest now resolves to a windows-2025-vs2026 preview
-          # image whose bundled flang compiler fails to compile reference
-          # LAPACK's Fortran source (a compiler bug, not fixable here).
-          # Bump this pin deliberately once VS2026/flang has matured.
+          # Windows x86_64 -- pinned rather than windows-latest, for the same
+          # reason as macOS: a new toolchain should arrive deliberately.
           - os: windows-2022
             arch: AMD64
     runs-on: ${{ matrix.os }}
     env:
-      CIBW_BUILD: "cp311-* cp312-* cp313-* cp314-*"
+      CIBW_BUILD: "cp312-* cp313-* cp314-*"
       # jaxlib (needed at build time for XLA FFI headers) has no musllinux
       # wheels published at all -- only manylinux, macOS, and Windows. That's
       # an upstream gap, not something fixable from this workflow, so skip
@@ -50,11 +46,9 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macosx_deployment_target }}
 
       # ── Linux ──────────────────────────────────────────────────────────────
-      # The default manylinux2014 image is too old: jaxlib and scipy no
-      # longer publish wheels for it, which forced pip to backtrack to
-      # ancient jax versions and eventually build scipy from source (which
-      # then failed on a missing OpenBLAS). Use manylinux_2_28 instead, which
-      # is current enough for modern prebuilt wheels of everything involved.
+      # The default manylinux2014 image is too old: jaxlib no longer publishes
+      # wheels for it, which forced pip to backtrack to ancient jax versions.
+      # manylinux_2_28 is current enough for its prebuilt wheels.
       CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
       CIBW_MANYLINUX_AARCH64_IMAGE: manylinux_2_28
       # augax is self-contained C++ (it links no SuiteSparse and no OpenMP), so
@@ -64,12 +58,15 @@ jobs:
       # delvewheel by default.
 
       # ── Every platform: test the repaired wheel before it can publish ─────
-      # The reference-sampler tests need polyagamma, which has no macOS arm64 or
-      # cp314 wheels; they run in unittests.yml.  These checks run everywhere.
-      CIBW_TEST_REQUIRES: pytest
+      # The full suite runs in unittests.yml.  These checks are quick enough to run
+      # on every platform and interpreter, including aarch64 under QEMU, where the
+      # tests that start fresh processes take too long; check_wheel.py covers
+      # float32 instead.  One abi3 wheel serves 3.12 and later, and cibuildwheel
+      # tests it under each.
+      CIBW_TEST_REQUIRES: pytest pytest-timeout
       CIBW_TEST_COMMAND: >
         python {project}/ci/check_wheel.py &&
-        pytest -q {project}/tests/test_batching.py
+        pytest -q {project}/tests/test_batching.py -k "not thread_count and not float32"
 
     steps:
       - uses: actions/checkout@v6
@@ -100,7 +97,7 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # setuptools-scm needs tags
       - name: Set up Python

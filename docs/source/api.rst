@@ -5,10 +5,10 @@
 API reference
 =============
 
-The public API of ``augax`` is one sampler per augmentation scheme; each works
-inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and ``jax.pmap``.
+Each sampler works inside ``jax.jit``, ``jax.vmap``, ``lax.scan``, and ``jax.pmap``,
+and has a ``*_numpy`` twin that makes the same draws for NumPy callers.
 
-Sampling
+Samplers
 --------
 
 .. autosummary::
@@ -17,30 +17,27 @@ Sampling
 
    pg_sample
    ks_sample
-   ks_sample_numpy
+   crt_sample
+   gig_sample
 
-Internal helpers
-~~~~~~~~~~~~~~~~
-
-These functions support :func:`pg_sample` and :func:`ks_sample` and are
-documented for completeness; they are not part of the stable public API.
+NumPy samplers
+--------------
 
 .. autosummary::
    :toctree: generated/
    :nosignatures:
 
-   _seed_from_key
-   _dispatch
-   _sample_batched
-   _ks_dispatch
-   _ks_sample_batched
-   _require_x64
+   pg_sample_numpy
+   ks_sample_numpy
+   crt_sample_numpy
+   gig_sample_numpy
 
-Module contents
----------------
+Pólya-Gamma moments
+-------------------
 
-.. automodule:: augax
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   pg_mean
+   pg_var

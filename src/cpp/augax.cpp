@@ -1,40 +1,41 @@
-// augax: on-device augmentation draws as XLA FFI custom calls.
+// augax: augmentation draws as XLA FFI custom calls.
 //
-// Pólya-Gamma (`pg_sample`) and the Kolmogorov scale of the logistic's normal
-// scale mixture (`ks_sample`).
+// Pólya-Gamma (`pg_sample`), the Kolmogorov scale of the logistic's normal scale
+// mixture (`ks_sample`), the Chinese restaurant table count (`crt_sample`) and the
+// generalized inverse Gaussian (`gig_sample`).
 //
-// Replaces the host `jax.pure_callback` PG draw (a device<->host round-trip
-// every Gibbs sweep, which serializes under jax.pmap and taxes every sweep) with
-// a native FFI custom call that samples PG on-device inside the JIT'd program.
+// Replaces the host `jax.pure_callback` PG draw (a device<->host round-trip every
+// Gibbs sweep, which serializes under jax.pmap and taxes every sweep) with a native
+// FFI custom call inside the JIT'd program.
 //
-// Sampler — the hybrid dispatch of zoj613/polyagamma (`method=None`), changed
-// where that scheme is measurably biased (2M-draw checks against the exact PG
-// mean and variance):
-//   - h > 50: normal approximation with the exact PG mean and variance.
-//   - 8 <= h <= 50: saddlepoint rejection sampler.  (polyagamma also uses it for
-//     4 < h < 8 with |z| <= 4, where it runs 1-2% low in variance.)
-//   - h = 1 (Bernoulli/logit), or integer h <= 4 with |z| <= 1: the exact
-//     Devroye method for PG(1, z) (Polson, Scott & Windle 2013), summed h times.
-//   - 1 < h < 8 otherwise (e.g. Negative-Binomial h = y + alpha): the alternate
-//     method (Windle, Polson & Scott 2014), with polyagamma's right-kernel
-//     constant corrected (see alt::bounding_kernel).
-//   - h < 1: the Gamma-series representation, exact in mean and variance.  (The
-//     alternate method assumes h >= 1; below it, it runs 0.4-0.8% low.)
+// PG sampler, by regime, the first that applies:
+//   - |z| >= 15 + log(h) for h > 1, |z| >= 15 otherwise: inverse Gaussian, which
+//     PG(h, z) is to within h exp(-|z|).
+//   - integer h <= 4 (h = 1 is the Bernoulli/logit): the exact Devroye method for
+//     PG(1, z) (Polson, Scott & Windle 2013), summed h times.
+//   - otherwise (e.g. Negative-Binomial h = y + alpha): the sum-of-gammas
+//     representation, K terms and an inverse Gaussian remainder, within 1e-6 of the
+//     exact law in Kolmogorov distance for h >= 0.03.
 //
-// RNG: a per-call splitmix64-seeded xoshiro256** — seeded from the JAX PRNG key,
-// so draws are reproducible and each call owns its generator (safe under
-// concurrent calls from several threads) — with ziggurat normals and
-// exponentials.
+// Invalid parameters (NaN, h < 0, infinite h) draw NaN.
+//
+// RNG: a per-stream splitmix64-seeded xoshiro256** — seeded from the JAX PRNG key,
+// so draws are reproducible and each stream owns its generator — with ziggurat
+// normals and exponentials.
 
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdlib>
+#include <limits>
+#include <memory>
+#include <system_error>
 #include <thread>
+#include <type_traits>
 #include <vector>
-#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -52,9 +53,9 @@ namespace {
 
 constexpr double PI = 3.141592653589793238462643383279502884;
 constexpr double PI2 = PI * PI;
-constexpr double PI4 = PI2 * PI2;
 constexpr double TRUNC = 0.64;            // Devroye truncation point
-constexpr double TRUNC_INV = 1.0 / 0.64;
+constexpr double SQRT_TRUNC = 0.8;        // sqrt(TRUNC)
+constexpr double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 
 // Ziggurat tables (Marsaglia & Tsang 2000; Doornik 2005), built once at load: a
 // 128-block normal and a 256-block exponential.  x[i] are the block edges
@@ -167,791 +168,317 @@ struct Rng {
   }
 };
 
-// log Phi(x) — log standard-normal CDF, via erfc.
-inline double pnorm_log(double x) {
-  return std::log(0.5 * std::erfc(-x * 0.7071067811865476));
-}
-
-// n-th coefficient of the alternating series for the Jacobi density at x.
-inline double a_coef(int n, double x) {
-  double d = n + 0.5;
-  if (x > TRUNC) {
-    return PI * d * std::exp(-d * d * PI2 * x * 0.5);
-  }
-  return std::pow(2.0 / (PI * x), 1.5) * PI * d * std::exp(-2.0 * d * d / x);
-}
-
-// Probability mass assigned to the right (truncated-exponential) region.
-inline double mass_texpon(double z) {
-  double fz = PI2 * 0.125 + 0.5 * z * z;
-  double b = std::sqrt(TRUNC_INV) * (TRUNC * z - 1.0);
-  double a = -std::sqrt(TRUNC_INV) * (TRUNC * z + 1.0);
-  double x0 = std::log(fz) + fz * TRUNC;
-  double xb = x0 - z + pnorm_log(b);
-  double xa = x0 + z + pnorm_log(a);
-  double qdivp = 4.0 / PI * (std::exp(xb) + std::exp(xa));
-  return 1.0 / (1.0 + qdivp);
-}
-
-// Sample from the inverse-Gaussian(mu=1/z, 1) truncated to (0, TRUNC).
-inline double rtigauss(double z, Rng& rng) {
-  z = std::fabs(z);
-  double mu = 1.0 / z;
-  double x = TRUNC + 1.0;
-  if (mu > TRUNC) {
-    // Rejection on the truncated region via the alternating series bound.
-    double alpha = 0.0;
-    while (rng.unif() > alpha) {
-      double e1 = rng.expon(), e2 = rng.expon();
-      while (e1 * e1 > 2.0 * e2 / TRUNC) {
-        e1 = rng.expon();
-        e2 = rng.expon();
-      }
-      x = TRUNC / ((1.0 + TRUNC * e1) * (1.0 + TRUNC * e1));
-      alpha = std::exp(-0.5 * z * z * x);
-    }
-  } else {
-    while (x > TRUNC) {
-      double y = rng.normal();
-      y = y * y;
-      double half_mu = 0.5 * mu;
-      double muY = mu * y;
-      x = mu + half_mu * muY - half_mu * std::sqrt(4.0 * muY + muY * muY);
-      if (rng.unif() > mu / (mu + x)) x = mu * mu / x;
-    }
-  }
-  return x;
-}
-
-// One draw X ~ PG(1, z_in) via the Devroye method.
-inline double sample_pg1(double z_in, Rng& rng) {
-  double z = std::fabs(z_in) * 0.5;
-  double fz = PI2 * 0.125 + 0.5 * z * z;
-  double p_right = mass_texpon(z);
-  while (true) {
-    double x;
-    if (rng.unif() < p_right) {
-      x = TRUNC + rng.expon() / fz;  // right: truncated exponential
-    } else {
-      x = rtigauss(z, rng);          // left: truncated inverse-Gaussian
-    }
-    double s = a_coef(0, x);
-    double y = rng.unif() * s;
-    int n = 0;
-    while (true) {
-      ++n;
-      if (n & 1) {
-        s -= a_coef(n, x);
-        if (y <= s) return 0.25 * x;  // PG(1,z) = X/4
-      } else {
-        s += a_coef(n, x);
-        if (y > s) break;             // reject; redraw proposal
-      }
-    }
-  }
-}
-
-// Gamma(shape, 1) via Marsaglia-Tsang (shape >= 1) with the shape < 1 boost.
-inline double gamma_draw(double shape, Rng& rng) {
-  if (shape < 1.0) {
-    double u = rng.unif();
-    return gamma_draw(shape + 1.0, rng) * std::pow(u, 1.0 / shape);
-  }
-  double d = shape - 1.0 / 3.0;
-  double c = 1.0 / std::sqrt(9.0 * d);
-  while (true) {
-    double x, v;
-    do {
-      x = rng.normal();
-      v = 1.0 + c * x;
-    } while (v <= 0.0);
-    v = v * v * v;
-    double u = rng.unif();
-    double x2 = x * x;
-    if (u < 1.0 - 0.0331 * x2 * x2) return d * v;
-    if (std::log(u) < 0.5 * x2 + d * (1.0 - v + std::log(v))) return d * v;
-  }
-}
-
-// PG(h, z) for h < 1 from the infinite-sum representation
-//   omega = (1/2π²) Σ_{k≥1} G_k / ((k-½)² + a²),  G_k ~ Gamma(h, 1),  a = |z|/2π.
-// The first K terms are drawn; the remainder is a Gamma matched to its mean and
-// variance, whose closed forms are
-//   Σ 1/d_k = (π/2a) tanh(πa),   Σ 1/d_k² = π tanh(πa)/(4a³) − π² sech²(πa)/(4a²),
-// so the draw is exact in mean and variance.  At K = 20 the remainder carries
-// about 1% of the mean, so its shape hardly matters.
-inline double sample_pg_gamma_series(double h, double z, Rng& rng) {
-  const int K = 20;
-  double a = std::fabs(z) / (2.0 * PI);
-  double a2 = a * a;
-  double acc = 0.0, sinvd = 0.0, sinvd2 = 0.0;
-  for (int k = 1; k <= K; ++k) {
-    double km = k - 0.5;
-    double d = km * km + a2;
-    acc += gamma_draw(h, rng) / d;
-    sinvd += 1.0 / d;
-    sinvd2 += 1.0 / (d * d);
-  }
-  double Sinf, Tinf;
-  if (a < 1e-4) {
-    Sinf = PI2 / 2.0;  // Σ 1/(k-½)² = π²/2
-    Tinf = PI4 / 6.0;  // Σ 1/(k-½)⁴ = π⁴/6
-  } else {
-    double th = std::tanh(PI * a);
-    double sech = 1.0 / std::cosh(PI * a);
-    Sinf = (PI / (2.0 * a)) * th;
-    Tinf = PI * th / (4.0 * a * a2) - PI2 * sech * sech / (4.0 * a2);
-  }
-  double tail_m = std::max(Sinf - sinvd, 0.0);
-  double tail_v = std::max(Tinf - sinvd2, 0.0);
-  double coef = 1.0 / (2.0 * PI2);
-  double omega = coef * acc;
-  double mean_r = h * coef * tail_m;
-  double var_r = h * coef * coef * tail_v;
-  if (mean_r > 0.0 && var_r > 1e-300) {
-    omega += gamma_draw(mean_r * mean_r / var_r, rng) * (var_r / mean_r);
-  } else {
-    omega += mean_r;
-  }
-  return omega;
-}
-
-// ---------------------------------------------------------------------------
-// Saddlepoint sampler for PG(h, z) (Windle, Polson & Scott 2014,
-// arXiv:1405.0506). A rejection sampler whose proposal envelope is a
-// two-piece bounding kernel and whose target is the saddlepoint density
-// approximation. O(1) per accepted draw, preferred for large h.
+// IG(mu, 1) / mu by Michael, Schucany & Haas (1976).  With v = mu Y^2, Y standard
+// normal, the roots of their quadratic are mu w and mu / w for
 //
-// Algorithm and constants ported from zoj613/polyagamma (BSD-3-Clause,
-// compatible with this package's license), adapted to augax's Rng and to
-// double precision throughout.
+//   w = 2 / (2 + v + sqrt(v (v + 4))),
+//
+// and the smaller is taken with probability 1 / (1 + w).  In this form nothing
+// cancels, and Y = 0 gives 1.  An infinite v gives w = 0, the limit.
+inline double inverse_gaussian_ratio(double mu, Rng& rng) {
+  const double y = rng.normal();
+  const double v = mu * y * y;
+  const double w = 2.0 / (2.0 + v + std::sqrt(v) * std::sqrt(v + 4.0));
+  return rng.unif() * (1.0 + w) <= 1.0 ? w : 1.0 / w;
+}
+
+// ---------------------------------------------------------------------------
+// PG(1, z): Devroye's alternating-series rejection sampler
+//
+// PG(1, z) = J*(1, c) / 4 with c = |z| / 2, and J*(1, c) has the density
+//
+//   f(x) = cosh(c) exp(-c^2 x / 2) sum_{n >= 0} (-1)^n a_n(x),
+//
+// where, with t = TRUNC,
+//
+//   a_n(x) = pi (n + 1/2) exp(-(n + 1/2)^2 pi^2 x / 2)                  for x > t,
+//   a_n(x) = pi (n + 1/2) (2 / (pi x))^(3/2) exp(-2 (n + 1/2)^2 / x)    for x <= t
+//
+// (Polson, Scott & Windle 2013, Section 4).  The n = 0 term bounds the sum, so it
+// makes the proposal, and the rest of the series decides acceptance.
 // ---------------------------------------------------------------------------
 
-// tanh(x)/x on [0, inf): Cody-Waite rational polynomial for x <= 4.95,
-// 1/x for x > 4.95. Max relative error < 1e-4.
-inline double tanh_x(double x) {
-  if (x > 4.95) return 1.0 / x;
-  static const double p0 = -0.16134119023996228053e+04,
-                     p1 = -0.99225929672236083313e+02,
-                     p2 = -0.96437492777225469787e+00,
-                     q0 = 0.48402357071988688686e+04,
-                     q1 = 0.22337720718962312926e+04,
-                     q2 = 0.11274474380534949335e+03;
-  double x2 = x * x;
-  return 1.0 + x2 * ((p2 * x2 + p1) * x2 + p0) /
-                     (((x2 + q2) * x2 + q1) * x2 + q0);
+// The probability of the proposal's piece above t.  With K = pi^2 / 8 + c^2 / 2, and
+// cosh(c) dropped from both, the pieces and their masses are
+//
+//   x >  t:  (pi / 2) exp(-K x),          mass  pi exp(-K t) / (2 K),
+//   x <= t:  2 exp(-c) IG(x | 1 / c, 1),  mass  2 exp(-c) P(IG(1 / c, 1) <= t),
+//
+// where P(IG(1 / c, 1) <= t) = Phi((c t - 1) / sqrt(t)) + exp(2 c) Phi(-(c t + 1) / sqrt(t)).
+inline double devroye_upper_probability(double c, double K) {
+  // Past this the lower piece outweighs the upper by more than e^600, and returning
+  // here keeps both exponentials below in range.
+  const double Kt = K * TRUNC;
+  if (Kt - c > 600.0) return 0.0;
+  const auto norm_cdf = [](double x) {
+    return 0.5 * std::erfc(-x * 0.7071067811865476);
+  };
+  const double lower_over_upper =
+      (4.0 / PI) * K *
+      (std::exp(Kt - c) * norm_cdf((c * TRUNC - 1.0) / SQRT_TRUNC) +
+       std::exp(Kt + c) * norm_cdf(-(c * TRUNC + 1.0) / SQRT_TRUNC));
+  return 1.0 / (1.0 + lower_over_upper);
 }
 
-// Parameters carried through one saddlepoint draw.
-struct SaddleParams {
-  double right_tangent_intercept;
-  double left_tangent_intercept;
-  double right_tangent_slope;
-  double left_tangent_slope;
-  double right_kernel_coef;
-  double left_kernel_coef;
-  double sqrt_alpha;       // 1/sqrt(alpha_l)
-  double log_cosh_z;       // log(cosh(z))
-  double sqrt_h2pi;        // sqrt(h/(2*pi))
-  double half_z2;         // 0.5 * z * z
-  double logxc;           // log(xc)
-  double xc;
-  double h;
-  double z;
-  double x;               // current proposal
-};
-
-// f and fprime at a point.
-struct FuncValue {
-  double f, fprime;
-};
-
-// K(t), the cumulant generating function. t = u + half_z2.
-inline double cumulant(double u, const SaddleParams* pr) {
-  if (u < 0.0)
-    return pr->log_cosh_z - std::log(std::cosh(std::sqrt(-2.0 * u)));
-  if (u > 0.0)
-    return pr->log_cosh_z - std::log(std::cos(std::sqrt(2.0 * u)));
-  return pr->log_cosh_z;
-}
-
-// K'(t) and K''(t). f = K'(t), fprime = K''(t).
-inline void cumulant_prime(double u, FuncValue* rv) {
-  double s = 2.0 * u;
-  if (s < 0.0) {
-    rv->f = tanh_x(std::sqrt(-s));
-  } else if (s > 0.0) {
-    rv->f = std::tan(std::sqrt(s)) / std::sqrt(s);
-  } else {
-    rv->f = 1.0;
-  }
-  // K''(t) = K'(t)^2 + (1 - K'(t))/t. Limit as t->0 is 1/3.
-  if (std::fabs(s) < 1e-12) {
-    rv->fprime = 1.0 / 3.0;
-  } else {
-    rv->fprime = rv->f * rv->f + (1.0 - rv->f) / s;
-  }
-}
-
-// Starting guess for Newton's method given x = K'(t). Upper bound of u is pi^2/8.
-inline double select_starting_guess(double x) {
-  if (x <= 0.25) return -9.0;
-  if (x <= 0.5) return -1.78;
-  if (x <= 1.0) return -0.147;
-  if (x <= 1.5) return 0.345;
-  if (x <= 2.5) return 0.72;
-  if (x <= 4.0) return 0.95;
-  return 1.15;
-}
-
-// Solve K'(t) = arg for t using Newton's method.
-inline double newton_raphson(double arg, double x0, FuncValue* value) {
-  static const double atol = 1e-05, rtol = 1e-05;
-  unsigned int n = 0;
-  double x = x0;
-  do {
-    x0 = x;
-    cumulant_prime(x0, value);
-    double fval = value->f - arg;
-    if (std::fabs(fval) <= atol || value->fprime <= atol) return x0;
-    x = x0 - fval / value->fprime;
-    // Convergence: relative + absolute closeness of successive iterates.
-  } while (std::fabs(x - x0) > atol + rtol * std::fabs(x) && ++n < 25);
-  return x;
-}
-
-// log standard normal CDF.
-inline double log_norm_cdf(double x) {
-  return std::log1p(-0.5 * std::erfc(x * 0.7071067811865476));
-}
-
-// log CDF of Inverse-Gaussian(mu, lambda), via Giner & Smyth (2016).
-inline double invgauss_logcdf(double x, double mu, double lambda) {
-  double qm = x / mu;
-  double tm = mu / lambda;
-  double r = std::sqrt(x / lambda);
-  double a = log_norm_cdf((qm - 1.0) / r);
-  double b = 2.0 / tm + log_norm_cdf(-(qm + 1.0) / r);
-  return a + std::log1p(std::exp(b - a));
-}
-
-// G(p, x) confluent hypergeometric ratio via continued fraction for x <= p.
-inline double confluent_x_smaller(double p, double x) {
-  float a = 1.0f, b = static_cast<float>(p);
-  float r = static_cast<float>(-(p - 1.0) * x);
-  float s = static_cast<float>(0.5 * x);
-  float f = a / b, c = a / FLT_MIN, d = 1.0f / b;
-  for (int n = 2; n < 100; ++n) {
-    a = (n & 1) ? s * (n - 1) : r - s * n;
-    b += 1.0f;
-    c = b + a / c;
-    if (c < FLT_MIN) c = FLT_MIN;
-    d = a * d + b;
-    if (d < FLT_MIN) d = FLT_MIN;
-    d = 1.0f / d;
-    float delta = c * d;
-    f *= delta;
-    if (std::fabs(delta - 1.0f) < FLT_EPSILON) break;
-  }
-  return f;
-}
-
-// G(p, x) for x > p.
-inline double confluent_p_smaller(double p, double x) {
-  float a = 1.0f, b = static_cast<float>(x - p + 1.0);
-  float f = a / b, c = a / FLT_MIN, d = 1.0f / b;
-  for (int n = 1; n < 100; ++n) {
-    a = static_cast<float>(n * (p - n));
-    b += 2.0f;
-    c = b + a / c;
-    if (c < FLT_MIN) c = FLT_MIN;
-    d = a * d + b;
-    if (d < FLT_MIN) d = FLT_MIN;
-    d = 1.0f / d;
-    float delta = c * d;
-    f *= delta;
-    if (std::fabs(delta - 1.0f) < FLT_EPSILON) break;
-  }
-  return f;
-}
-
-// (Normalized or not) upper incomplete gamma(p, x).
-// Abergel & Moisan (2020) continued fractions + terminating series for
-// small int/half-int p <= 30.
-inline double upper_incomplete_gamma(double p, double x, bool normalized) {
-  if (normalized) {
-    int p_int = static_cast<int>(p);
-    if (p == p_int && p < 30.0) {
-      double sum, r;
-      int k = 1;
-      for (sum = r = 1.0; k < p_int; ++k) sum += (r *= x / k);
-      return std::exp(-x) * sum;
-    } else if (p == p_int + 0.5 && p < 30.0) {
-      double sum, r;
-      int k = 1;
-      static const double one_sqrtpi = 0.5641895835477563;
-      double sqrt_x = std::sqrt(x);
-      for (r = 1.0, sum = 0.0; k < p_int + 1; ++k) sum += (r *= x / (k - 0.5));
-      return std::erfc(sqrt_x) + std::exp(-x) * one_sqrtpi * sum / sqrt_x;
+// IG(1 / c, 1) truncated to x <= t, the proposal's piece below t.
+//
+// With the mean above t, most of the law lies past the truncation, so propose from
+// its c = 0 limit, x = 1 / Y^2 for a standard normal Y with |Y| >= 1 / sqrt(t), and
+// accept with probability exp(-c^2 x / 2).  The normal tail is Marsaglia's: |Y| =
+// (1 + t E) / sqrt(t) for E ~ Exp(1), accepted with probability exp(-t E^2 / 2).
+//
+// With the mean at most t, reject from the law itself.
+inline double truncated_inverse_gaussian(double c, Rng& rng) {
+  if (c * TRUNC < 1.0) {
+    const double half_c2 = 0.5 * c * c;
+    for (;;) {
+      const double e = rng.expon();
+      if (TRUNC * e * e > 2.0 * rng.expon()) continue;
+      const double root = 1.0 + TRUNC * e;
+      const double x = TRUNC / (root * root);
+      if (rng.unif() <= std::exp(-half_c2 * x)) return x;
     }
   }
-  bool x_smaller = p >= x;
-  double f = x_smaller ? confluent_x_smaller(p, x)
-                       : confluent_p_smaller(p, x);
-  if (normalized) {
-    double out = f * std::exp(-x + p * std::log(x) - std::lgamma(p));
-    return x_smaller ? 1.0 - out : out;
-  } else if (x_smaller) {
-    double lgam = std::lgamma(p);
-    double exp_lgam = std::exp(std::min(lgam, 88.7228));
-    double arg = -x + p * std::log(x) - lgam;
-    if (arg >= 88.7228) arg = 88.7228;
-    if (arg <= -88.7228) arg = -88.7228;
-    return (1.0 - f * std::exp(arg)) * exp_lgam;
-  } else {
-    double arg = -x + p * std::log(x);
-    return f * (arg >= 88.7228 ? std::exp(88.7228) : std::exp(arg));
-  }
-}
-
-// Sample X ~ Gamma(shape=a, rate=b) truncated to {x > t}.
-inline double random_left_bounded_gamma(double a, double b, double t, Rng& rng) {
-  if (a > 1.0) {
-    // Work with the standard Gamma(a, 1) variate truncated at t * b, and scale
-    // back on return, as polyagamma does.  (Keeping the unscaled b here biased
-    // every a > 1 draw: the saddlepoint and alternate right-hand proposals.)
-    b = t * b;
-    double amin1 = a - 1.0;
-    double bmina = b - a;
-    double c0 = 0.5 * (bmina + std::sqrt(bmina * bmina + 4.0 * b)) / b;
-    double one_minus_c0 = 1.0 - c0;
-    double log_m = amin1 * (std::log(amin1 / one_minus_c0) - 1.0);
-    double x, threshold;
-    do {
-      x = b + rng.expon() / c0;
-      threshold = amin1 * std::log(x) - x * one_minus_c0 - log_m;
-    } while (std::log1p(-rng.unif()) > threshold);
-    return t * (x / b);
-  } else if (a == 1.0) {
-    return t + rng.expon() / b;
-  } else {
-    double amin1 = a - 1.0;
-    double tb = t * b;
-    double x;
-    do {
-      x = 1.0 + rng.expon() / tb;
-    } while (std::log1p(-rng.unif()) > amin1 * std::log(x));
-    return t * x;
-  }
-}
-
-// Precompute envelope and kernel constants for one (h, z).
-inline void set_sampling_parameters(SaddleParams* pr, double h, double z) {
-  static const double log275 = 1.0116009116784799;
-  static const double log3 = 1.0986122886681098;
-  double xl, logxl;
-  if (z > 0.0) {
-    xl = tanh_x(z);
-    logxl = std::log(xl);
-    pr->half_z2 = 0.5 * z * z;
-    pr->log_cosh_z = std::log(std::cosh(z));
-  } else {
-    xl = 1.0;
-    logxl = 0.0;
-    pr->half_z2 = 0.0;
-    pr->log_cosh_z = 0.0;
-  }
-  pr->xc = 2.75 * xl;
-  double xr = 3.0 * xl;
-  pr->h = h;
-  pr->z = z;
-  double xc_inv = 1.0 / pr->xc;
-  double xl_inv = 1.0 / xl;
-  double ul = -pr->half_z2;
-  FuncValue rv;
-  double ur = newton_raphson(xr, select_starting_guess(xr), &rv);
-  newton_raphson(pr->xc, select_starting_guess(pr->xc), &rv);
-  double tr = ur + pr->half_z2;
-  pr->left_tangent_slope = -0.5 * (xl_inv * xl_inv);
-  pr->left_tangent_intercept = cumulant(ul, pr) - 0.5 * xc_inv + xl_inv;
-  pr->logxc = log275 + logxl;
-  pr->right_tangent_slope = -tr - 1.0 / xr;
-  pr->right_tangent_intercept =
-      cumulant(ur, pr) + 1.0 - log3 - logxl + pr->logxc;
-  double alpha_r = rv.fprime * (xc_inv * xc_inv);  // K''(t(xc)) / xc^2
-  double alpha_l = xc_inv * alpha_r;               // K''(t(xc)) / xc^3
-  pr->sqrt_alpha = 1.0 / std::sqrt(alpha_l);
-  pr->sqrt_h2pi = std::sqrt(h * (0.5 / PI));
-  pr->left_kernel_coef = pr->sqrt_h2pi * pr->sqrt_alpha;
-  pr->right_kernel_coef = pr->sqrt_h2pi / std::sqrt(alpha_r);
-}
-
-// Saddlepoint density estimate at pr->x.
-inline double saddle_point(SaddleParams* pr) {
-  FuncValue rv;
-  double u = newton_raphson(pr->x, select_starting_guess(pr->x), &rv);
-  double t = u + pr->half_z2;
-  return std::exp(pr->h * (cumulant(u, pr) - t * pr->x)) *
-         pr->sqrt_h2pi / std::sqrt(rv.fprime);
-}
-
-// Bounding kernel k(x|h,z) (Proposition 17 of Windle et al. 2014).
-inline double bounding_kernel(const SaddleParams* pr) {
-  double point;
-  if (pr->x > pr->xc) {
-    point = pr->right_tangent_slope * pr->x + pr->right_tangent_intercept;
-    return std::exp(pr->h * (pr->logxc + point) + (pr->h - 1.0) * std::log(pr->x)) *
-           pr->right_kernel_coef;
-  }
-  point = pr->left_tangent_slope * pr->x + pr->left_tangent_intercept;
-  return std::exp(0.5 * pr->h * (1.0 / pr->xc - 1.0 / pr->x) +
-                  pr->h * point - 1.5 * std::log(pr->x)) *
-         pr->left_kernel_coef;
-}
-
-// One draw omega ~ PG(h, z) via the saddlepoint rejection sampler.
-inline double sample_pg_saddlepoint(double h, double z, Rng& rng) {
-  SaddleParams pr;
-  // The tilting is absorbed by halving |z| internally (the envelope is built
-  // in the un-tilted coordinate, and the final 0.25*h*x scale recovers PG).
-  set_sampling_parameters(&pr, h, 0.5 * std::fabs(z));
-  double sqrt_rho = std::sqrt(-2.0 * pr.left_tangent_slope);
-  double sqrt_rho_inv = 1.0 / sqrt_rho;
-  double p = std::exp(h * (0.5 / pr.xc + pr.left_tangent_intercept - sqrt_rho) +
-                      invgauss_logcdf(pr.xc, sqrt_rho_inv, h)) *
-             pr.sqrt_alpha;
-  double hrho = -h * pr.right_tangent_slope;
-  double q = upper_incomplete_gamma(h, hrho * pr.xc, false) *
-             pr.right_kernel_coef *
-             std::exp(h * (pr.right_tangent_intercept - std::log(hrho)));
-  double proposal_probability = p / (p + q);
-  double mu2 = sqrt_rho_inv * sqrt_rho_inv;
-  while (true) {
-    do {
-      if (rng.unif() < proposal_probability) {
-        // Left proposal: truncated Inverse-Gaussian via Michael-Schucany-Haas.
-        do {
-          double y = rng.normal();
-          double w = sqrt_rho_inv + 0.5 * mu2 * y * y / h;
-          pr.x = w - std::sqrt(std::fabs(w * w - mu2));
-          if (rng.unif() * (1.0 + pr.x * sqrt_rho) > 1.0) pr.x = mu2 / pr.x;
-        } while (pr.x >= pr.xc);
-      } else {
-        pr.x = random_left_bounded_gamma(h, hrho, pr.xc, rng);
-      }
-    } while (rng.unif() * bounding_kernel(&pr) > saddle_point(&pr));
-    return std::max(0.25 * h * pr.x, 1e-12);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Alternate sampler for PG(h, z) (Windle, Polson & Scott 2014,
-// arXiv:1405.0506, Section 4): exact, used for real h below the saddlepoint
-// region (e.g. the Negative-Binomial h = y + alpha).  It draws J*(h, z/2) from a
-// two-piece proposal — a left-truncated Gamma right of the truncation point t
-// and a right-truncated inverse-Gaussian left of it — accepted through the
-// alternating-series bound, and returns PG(h, z) = J*(h, z/2) / 4.  For h > 4
-// the draw is a sum of J*(b_i, z/2) with sum(b_i) = h and every b_i <= 4.
-//
-// Algorithm, constants and truncation-point table ported from zoj613/polyagamma
-// (src/pgm_alternate.c, BSD-3-Clause), with one constant corrected (see
-// bounding_kernel).  The alternating series is evaluated in
-// single precision as there, because its termination test relies on terms
-// vanishing at float resolution.
-// ---------------------------------------------------------------------------
-namespace alt {
-
-constexpr int kTableSize = 25;
-constexpr double kMaxH = 4.0;
-// Optimal truncation point t(h) on h = 1, 1.125, ..., 4.
-constexpr double kTruncPoint[kTableSize] = {
-    1.273239366, 1.901515423, 2.281992126, 2.607829551, 2.910421526,
-    3.200449543, 3.482766779, 3.759955106, 4.033540671, 4.304486011,
-    4.573437633, 4.840840644, 5.107017272, 5.372204821, 5.636581947,
-    5.900288573, 6.163432428, 6.426094330, 6.688351603, 6.950254767,
-    7.211854235, 7.473186206, 7.734284136, 7.995175158, 8.255882407};
-// log(n!) for n < 16; lgamma beyond.
-constexpr double kLogFactorial[16] = {
-    0.0, 0.0, 0.69314718055994530943, 1.79175946922805500079,
-    3.17805383034794561975, 4.78749174278204599415, 6.57925121201010099526,
-    8.52516136106541430086, 10.60460290274525022719, 12.80182748008146961186,
-    15.10441257307551529612, 17.50230784587388584150, 19.98721449566188614923,
-    22.55216385312342288610, 25.19122118273868150135, 27.89927138384089156699};
-constexpr double PI2_8 = 1.233700550136169827354311374984519;    // pi^2 / 8
-constexpr double LOGPI_2 = 0.4515827052894548647261952298948821;  // log(pi / 2)
-constexpr double LS2PI = 0.9189385332046727417803297364056177;    // log(sqrt(2 pi))
-constexpr double LOG2 = 0.6931471805599453094172321214581766;
-
-struct Params {
-  float proposal_probability;  // q / (p + q)
-  double log_lambda_z;
-  double lambda_z;             // pi^2 / 8 + z^2 / 2
-  double half_h2;
-  double lgammah;              // lgamma(h)
-  double hlog2;
-  double t_inv;
-  double logx;
-  double h_z2;                 // (h / z)^2
-  double h_z;
-  double z2;
-  double h;
-  double z;
+  const double mu = 1.0 / c;
   double x;
-  double t;
+  do {
+    x = mu * inverse_gaussian_ratio(mu, rng);
+  } while (x >= TRUNC);
+  return x;
+}
+
+// Accept the proposal x, given U(0, 1), with probability sum_n (-1)^n a_n(x) / a_0(x).
+// Both forms of a_n give the same series,
+//
+//   a_n(x) / a_0(x) = (2 n + 1) q^(n (n + 1)),
+//   q = exp(-pi^2 x / 2) for x > t,   q = exp(-2 / x) for x <= t,
+//
+// whose partial sums bracket the probability.  Everywhere q <= exp(-2 / t), so the
+// first of them is at least 1 - 3 exp(-4 / t) > 0.9942, which settles nearly every
+// proposal without evaluating q at all.
+inline bool accept_jacobi(double x, double u) {
+  if (u <= 0.9942) return true;
+  const double q = std::exp(x > TRUNC ? -0.5 * PI2 * x : -2.0 / x);
+  const double q2 = q * q;
+  double sum = 1.0;
+  double power = q2;     // q^(n (n + 1))
+  double step = q2 * q2; // q^(2 (n + 1)), the next ratio of powers
+  for (int n = 1;; n += 2) {
+    sum -= (2 * n + 1) * power;
+    if (u <= sum) return true;
+    power *= step;
+    step *= q2;
+    sum += (2 * n + 3) * power;
+    if (u > sum) return false;
+    power *= step;
+    step *= q2;
+  }
+}
+
+inline double sample_pg1(double z, Rng& rng) {
+  const double c = 0.5 * std::fabs(z);
+  const double K = 0.125 * PI2 + 0.5 * c * c;
+  const double upper = devroye_upper_probability(c, K);
+  for (;;) {
+    const double x = rng.unif() < upper ? TRUNC + rng.expon() / K
+                                        : truncated_inverse_gaussian(c, rng);
+    if (accept_jacobi(x, rng.unif())) return 0.25 * x;
+  }
+}
+
+// Gamma(shape, 1) for shape >= 1 (Marsaglia & Tsang 2000), set up once for draws
+// that repeat a shape.
+struct GammaShape {
+  double d, c;
+  explicit GammaShape(double shape)
+      : d(shape - 1.0 / 3.0), c(1.0 / std::sqrt(9.0 * d)) {}
+  double draw(Rng& rng) const {
+    for (;;) {
+      double x, v;
+      do {
+        x = rng.normal();
+        v = 1.0 + c * x;
+      } while (v <= 0.0);
+      v = v * v * v;
+      const double u = rng.unif();
+      const double x2 = x * x;
+      if (u < 1.0 - 0.0331 * x2 * x2) return d * v;
+      if (std::log(u) < 0.5 * x2 + d * (1.0 - v + std::log(v))) return d * v;
+    }
+  }
 };
 
-// Truncation point for h in [1, 4], linearly interpolated on the table (h <= 1
-// takes the first entry).  polyagamma looks it up by binary search, whose
-// neighbour access runs off the table for h in (1, 1.125); t only tunes the
-// proposal's efficiency, so plain interpolation is equivalent and bounds-safe.
-inline double truncation_point(double h) {
-  if (h <= 1.0) return kTruncPoint[0];
-  if (h >= kMaxH) return kTruncPoint[kTableSize - 1];
-  double pos = (h - 1.0) * 8.0;
-  int i = static_cast<int>(pos);
-  double frac = pos - i;
-  return kTruncPoint[i] + frac * (kTruncPoint[i + 1] - kTruncPoint[i]);
-}
+// The first three cumulants of PG(1, z), with r = |z| / 2, t = tanh(r), s = sech^2(r):
+//
+//   k1 = t / (4 r),
+//   k2 = A / (16 r^3),   A = t - r s,
+//   k3 = B / (64 r^5),   B = 3 A - 2 r^2 t s,
+//
+// the derivatives at 0 of log cosh(r) - log cosh(sqrt(r^2 - w / 2)).  Those of PG(h, z)
+// are h times these.  Below r = 0.02, where A and B lose digits to cancellation, they
+// come from their series.
+struct PgCumulants {
+  double k1, k2, k3;
+};
 
-inline double log_factorial(unsigned int n) {
-  return n < 16 ? kLogFactorial[n] : std::lgamma(n + 1.0);
-}
-
-// a^L_n(x | h), the n-th coefficient of the alternating sum S^L(x | h).
-inline float piecewise_coef(unsigned int n, const Params& pr) {
-  double a = 2.0 * n + pr.h;
-  double b = n ? std::lgamma(n + pr.h) - pr.lgammah : 0.0;
-  return static_cast<float>(
-      std::exp(pr.hlog2 + b - log_factorial(n) - LS2PI - 1.5 * pr.logx -
-               0.5 * a * a / pr.x) * a);
-}
-
-// Bounding kernel k(x | h).
-inline float bounding_kernel(const Params& pr) {
-  if (pr.x > pr.t) {
-    // log(pi / 2).  polyagamma uses log(sqrt(pi / 2)), leaving this piece of the
-    // envelope a factor (pi/2)^(h/2) below both the Gamma proposal it weights by
-    // q, computed with (pi/2)^h, and the density's own tail,
-    // (pi/2)^h x^(h-1) exp(-pi^2 x / 8) / Gamma(h) — Devroye's pi/2 at h = 1.
-    // The shortfall over-accepts x > t: +0.4-0.9% in the mean and +1-5% in the
-    // variance for 1 < h < 4 at small |z|.
-    static const double a = LOGPI_2;
-    return static_cast<float>(std::exp(pr.h * a + (pr.h - 1.0) * pr.logx -
-                                       PI2_8 * pr.x - pr.lgammah));
+inline PgCumulants pg_cumulants(double r) {
+  const double r2 = r * r;
+  if (r < 0.02) {
+    return {0.25 * (1.0 - r2 / 3.0 + 2.0 * r2 * r2 / 15.0),
+            (1.0 - 0.8 * r2 + 17.0 * r2 * r2 / 35.0) / 24.0,
+            (1.0 - 17.0 * r2 / 14.0 + 62.0 * r2 * r2 / 63.0) / 60.0};
   }
-  if (pr.x > 0.0) {
-    return static_cast<float>(
-        std::exp(pr.hlog2 - pr.half_h2 / pr.x - 1.5 * pr.logx - LS2PI) * pr.h);
-  }
-  return 0.0f;
+  const double t = std::tanh(r);
+  const double e = std::exp(-2.0 * r);
+  const double s = 4.0 * e / ((1.0 + e) * (1.0 + e));
+  const double A = t - r * s;
+  const double B = 3.0 * A - 2.0 * r2 * t * s;
+  return {0.25 * t / r, A / (16.0 * r2 * r), B / (64.0 * r2 * r2 * r)};
 }
 
-// CDF of the inverse-Gaussian proposal at t.
-inline double invgauss_cdf(const Params& pr) {
-  static const double sqrt2_inv = 0.7071067811865475;
-  double st = std::sqrt(pr.t);
-  double a = sqrt2_inv * pr.h / st;
-  double b = pr.z * st * sqrt2_inv;
-  double ez = std::exp(pr.h * pr.z);
-  return 0.5 * (std::erfc(a - b) + ez * std::erfc(b + a) * ez);
+// ---------------------------------------------------------------------------
+// PG(h, z) as a sum of gammas:
+//
+//   omega = sum_{k >= 1} w_k G_k,   G_k ~ Gamma(h, 1),
+//   w_k = 1 / (2 pi^2 d_k),   d_k = (k - 1/2)^2 + a^2,   a = |z| / (2 pi),
+//
+// whose first three cumulants are h sum w_k, h sum w_k^2 and 2 h sum w_k^3.  The first K
+// terms are drawn.  The rest becomes shift + IG(mu, lambda), matched to those cumulants.
+// The inverse Gaussian is the right law for it: w_k falls as 1 / k^2, so the Levy density
+// of the remainder near 0 goes as x^(-3/2), which is the inverse Gaussian's, where a
+// gamma's goes as x^(-1).  It is also the limit of the whole law at large |z| (see
+// sample_pg_inverse_gaussian).
+//
+// The characteristic function of this approximation and of PG(h, z) are both in closed
+// form, which bounds the Kolmogorov distance between them with no sampling noise:
+//
+//   sup_x |F(x) - G(x)| <= (1 / pi) int_0^inf |phi_F(u) - phi_G(u)| / u du.
+//
+// The bound falls as K rises and as h rises, so K can fall as h rises.
+// ---------------------------------------------------------------------------
+
+// The terms that hold the bound above 1e-6 at every |z| this sampler sees (the test suite
+// computes it).  At small h the cost is about 4 / h terms, so it stops at 128, near
+// h = 0.03; below that the error grows, at scales of omega far below its standard deviation.
+constexpr int PG_SERIES_MAX_TERMS = 128;
+
+inline int pg_series_terms(double h) {
+  if (h >= 400.0) return 1;
+  if (h >= 200.0) return 2;
+  if (h >= 65.0) return 3;
+  if (h >= 20.0) return 4;
+  if (h >= 6.0) return 5;
+  if (h <= 4.0 / (PG_SERIES_MAX_TERMS - 5)) return PG_SERIES_MAX_TERMS;
+  return static_cast<int>(std::ceil(4.0 / h)) + 5;
 }
 
-// Set the h-dependent constants; with `update` the z-dependent ones from an
-// earlier call are kept (the chunked draw for h > 4).
-inline void set_sampling_parameters(Params& pr, double h, bool update) {
-  double p;
-  pr.h = h;
-  pr.t = truncation_point(h);
-  pr.t_inv = 1.0 / pr.t;
-  pr.half_h2 = 0.5 * h * h;
-  pr.lgammah = std::lgamma(h);
-  pr.hlog2 = h * LOG2;
-  if (pr.z > 0.0) {
-    if (!update) {
-      pr.z2 = pr.z * pr.z;
-      pr.lambda_z = PI2_8 + 0.5 * pr.z2;
-      pr.log_lambda_z = std::log(pr.lambda_z);
-    }
-    pr.h_z = h / pr.z;
-    pr.h_z2 = pr.h_z * pr.h_z;
-    p = std::exp(pr.hlog2 - h * pr.z) * invgauss_cdf(pr);
+// The cumulants per unit h of sum_{k > K} w_k G_k, for K >= 10 and a^2 / K^2 well below 1.
+// Subtracting the first K terms from the whole would cancel nearly every digit at large K,
+// so these are direct: the midpoint Euler-Maclaurin rule,
+//
+//   sum_{k > K} f(k - 1/2) = int_K^inf f(s) ds + f'(K) / 24 - 7 f'''(K) / 5760 + ...,
+//
+// for f = d^(-j), whose integrals are series in q = a^2 / K^2.  The mean needs this
+// accuracy: near |z| = 15 the standard deviation of omega is small enough for a tiny shift
+// to show.
+inline PgCumulants pg_tail_cumulants(double K, double a2) {
+  const double K2 = K * K;
+  const double K3 = K2 * K;
+  const double q = a2 / K2;
+  const double d = K2 + a2;
+  const double d2 = d * d;
+  const double d3 = d2 * d;
+  const double d4 = d2 * d2;
+  const double c = 7.0 / 5760.0;
+  const double s1 =
+      (1.0 + q * (-1.0 / 3.0 + q * (1.0 / 5.0 + q * (-1.0 / 7.0 + q / 9.0)))) / K -
+      K / (12.0 * d2) - c * (24.0 * K / d3 - 48.0 * K3 / d4);
+  const double s2 =
+      (1.0 / 3.0 + q * (-2.0 / 5.0 + q * (3.0 / 7.0 + q * (-4.0 / 9.0 + q * 5.0 / 11.0)))) / K3 -
+      K / (6.0 * d3) - c * (72.0 * K / d4 - 192.0 * K3 / (d4 * d));
+  const double s3 =
+      (1.0 / 5.0 + q * (-3.0 / 7.0 + q * (2.0 / 3.0 + q * (-10.0 / 11.0 + q * 15.0 / 13.0)))) /
+          (K3 * K2) -
+      K / (4.0 * d4) - c * (144.0 * K / (d4 * d) - 480.0 * K3 / (d3 * d3));
+  const double w = 1.0 / (2.0 * PI2);
+  return {w * s1, w * w * s2, 2.0 * w * w * w * s3};
+}
+
+// The remainder as shift + IG(mu, mu^2 / psi), matched to its three cumulants: an inverse
+// Gaussian has k2 = mu psi and k3 = 3 mu psi^2.
+struct PgRemainder {
+  double shift, mu, psi;
+};
+
+inline PgRemainder pg_series_remainder(double h, double r, int K) {
+  const double a2 = r * r / PI2;
+  PgCumulants rest;
+  if (K >= 10) {
+    rest = pg_tail_cumulants(K, a2);
   } else {
-    if (!update) {
-      pr.lambda_z = PI2_8;
-      pr.log_lambda_z = std::log(pr.lambda_z);
-    }
-    p = std::exp(pr.hlog2) * std::erfc(h / std::sqrt(2.0 * pr.t));
-  }
-  double q = std::exp(h * (LOGPI_2 - pr.log_lambda_z)) *
-             upper_incomplete_gamma(h, pr.lambda_z * pr.t, true);
-  pr.proposal_probability = static_cast<float>(q / (p + q));
-}
-
-// X ~ Inverse-Gaussian(h/z, h^2) truncated to {x < t} (Devroye 1986, p. 149
-// when the mean is below t; a scaled inverse-chi-square proposal otherwise).
-inline void right_bounded_invgauss(Rng& rng, Params& pr) {
-  if (pr.t < pr.h_z) {
-    do {
-      pr.x = 1.0 / random_left_bounded_gamma(0.5, pr.half_h2, pr.t_inv, rng);
-    } while (std::log1p(-rng.unif()) >= -0.5 * pr.z2 * pr.x);
-    return;
-  }
-  do {
-    double y = rng.normal();
-    double w = pr.h_z + 0.5 * y * y / pr.z2;
-    pr.x = w - std::sqrt(std::fabs(w * w - pr.h_z2));
-    if (rng.unif() * (pr.h_z + pr.x) > pr.h_z) pr.x = pr.h_z2 / pr.x;
-  } while (pr.x >= pr.t);
-}
-
-// One draw from J*(h, z) for h <= 4.
-inline double jacobi_star(Rng& rng, Params& pr) {
-  for (;;) {
-    if (rng.unif() <= pr.proposal_probability) {
-      pr.x = random_left_bounded_gamma(pr.h, pr.lambda_z, pr.t, rng);
-    } else if (pr.z > 0.0) {
-      right_bounded_invgauss(rng, pr);
-    } else {
-      pr.x = 1.0 / random_left_bounded_gamma(0.5, pr.half_h2, pr.t_inv, rng);
-    }
-    pr.logx = std::log(pr.x);
-    float u = static_cast<float>(rng.unif()) * bounding_kernel(pr);
-    float s = piecewise_coef(0, pr);
-    for (unsigned int n = 1;; ++n) {
-      float old_s = s;
-      if (n & 1) {
-        s -= piecewise_coef(n, pr);
-        if (old_s >= s && u <= s) return pr.x;
-      } else {
-        s += piecewise_coef(n, pr);
-        if (old_s >= s && u > s) break;
-      }
+    rest = pg_cumulants(r);
+    for (int k = 1; k <= K; ++k) {
+      const double km = k - 0.5;
+      const double w = 1.0 / (2.0 * PI2 * (km * km + a2));
+      rest.k1 -= w;
+      rest.k2 -= w * w;
+      rest.k3 -= 2.0 * w * w * w;
     }
   }
+  const double psi = rest.k3 / (3.0 * rest.k2);
+  const double mu = h * rest.k2 / psi;
+  return {h * rest.k1 - mu, mu, psi};
 }
 
-}  // namespace alt
-
-// One draw omega ~ PG(h, z) via the alternate method.
-inline double sample_pg_alternate(double h, double z, Rng& rng) {
-  alt::Params pr{};
-  pr.z = 0.5 * std::fabs(z);
-  if (h <= alt::kMaxH) {
-    alt::set_sampling_parameters(pr, h, false);
-    return 0.25 * alt::jacobi_star(rng, pr);
+inline double sample_pg_series(double h, double z, Rng& rng) {
+  const double r = 0.5 * std::fabs(z);
+  const double a2 = r * r / PI2;
+  const int K = pg_series_terms(h);
+  const bool boost = h < 1.0;  // Gamma(h) = Gamma(h + 1) exp(-E / h) for E ~ Exp(1)
+  const GammaShape gamma(boost ? h + 1.0 : h);
+  const double inv_h = 1.0 / h;
+  double omega = 0.0;
+  for (int k = 1; k <= K; ++k) {
+    const double km = k - 0.5;
+    double g = gamma.draw(rng);
+    if (boost) g *= std::exp(-rng.expon() * inv_h);
+    omega += g / (2.0 * PI2 * (km * km + a2));
   }
-  double chunk = h >= alt::kMaxH + 1.0 ? alt::kMaxH : alt::kMaxH - 1.0;
-  alt::set_sampling_parameters(pr, chunk, false);
-  double out = 0.0;
-  while (h > alt::kMaxH) {
-    out += 0.25 * alt::jacobi_star(rng, pr);
-    h -= chunk;
-  }
-  alt::set_sampling_parameters(pr, h, true);
-  return out + 0.25 * alt::jacobi_star(rng, pr);
+  const PgRemainder rest = pg_series_remainder(h, r, K);
+  return omega + rest.shift + rest.mu * inverse_gaussian_ratio(rest.psi / rest.mu, rng);
 }
 
-// One draw omega ~ PG(h, z) from the normal with PG's mean and variance:
-//   mean = h tanh(z/2) / (2z),  var = h (sinh z - z) sech^2(z/2) / (4 z^3).
-// For small |z| the variance uses its series, h/24 - h z^2 / 240 (the closed
-// form cancels catastrophically there).
-inline double sample_pg_normal(double h, double z, Rng& rng) {
-  z = std::fabs(z);
-  double mean, var;
-  if (z < 1e-3) {
-    mean = h * (0.25 - z * z / 48.0);
-    var = h * (1.0 / 24.0 - z * z / 240.0);
-  } else {
-    double th = std::tanh(0.5 * z);
-    mean = 0.5 * h * th / z;
-    var = 0.25 * h * (std::sinh(z) - z) * (1.0 - th * th) / (z * z * z);
-  }
-  return mean + rng.normal() * std::sqrt(var);
+// Large |z|: PG(h, z) is inverse Gaussian.  With r = |z| / 2 and r' = sqrt(r^2 - w / 2),
+// the cumulant generating function of PG(h, z) is
+//
+//   h (r - r') + h (log1p(exp(-2 r)) - log1p(exp(-2 r'))),
+//
+// and the first term alone is that of IG(h / (2 |z|), h^2 / 4).  The second is at most
+// h exp(-|z|) for the Laplace transform, so past PG_IG_Z + log h the two differ by less
+// than 3.1e-7, far below what the samplers it replaces achieve there.  IG(mu, lambda) is
+// lambda IG(mu / lambda, 1).
+constexpr double PG_IG_Z = 15.0;
+
+inline double sample_pg_inverse_gaussian(double h, double az, Rng& rng) {
+  return h / (2.0 * az) * inverse_gaussian_ratio(2.0 / (h * az), rng);
 }
 
-// PG(h, z): dispatch as described in the header.  PG is even in z, so the
-// thresholds use |z|.
+// PG(h, z): dispatch as described in the header.  PG is even in z, so the thresholds
+// use |z|.  PG(0, z) is 0, and so is the limit of an infinite |z|.  Every sampler but
+// the first therefore sees only moderate |z|.
 inline double sample_pg(double h, double z, Rng& rng) {
-  double az = std::fabs(z);
-  if (h > 50.0) return sample_pg_normal(h, z, rng);
-  if (h >= 8.0) return sample_pg_saddlepoint(h, z, rng);
-  if (h == 1.0 || (h == std::floor(h) && h <= 4.0 && az <= 1.0)) {
-    int m = static_cast<int>(h);
+  const double az = std::fabs(z);
+  if (!(h >= 0.0) || std::isinf(h) || std::isnan(z)) return NOT_A_NUMBER;
+  if (h == 0.0 || std::isinf(az)) return 0.0;
+  if (az >= PG_IG_Z + std::log(std::max(h, 1.0)))
+    return sample_pg_inverse_gaussian(h, az, rng);
+  if (h == std::floor(h) && h <= 4.0) {
+    const int m = static_cast<int>(h);
     double acc = 0.0;
     for (int i = 0; i < m; ++i) acc += sample_pg1(z, rng);
     return acc;
   }
-  if (h < 1.0) return sample_pg_gamma_series(h, z, rng);
-  return sample_pg_alternate(h, z, rng);
-}
-
-// Draw omega[i] ~ PG(h[i], z[i]) for i in [0, n) from one stream.
-void draw_serial(const double* h, const double* z, int64_t n, uint64_t seed,
-                 double* out) {
-  Rng rng(seed);
-  for (int64_t i = 0; i < n; ++i) {
-    out[i] = std::max(sample_pg(h[i], z[i], rng), 1e-12);
-  }
-}
-
-// Elements per independently seeded block.  Blocks are fixed by n alone, never
-// by the thread count, so a draw is reproducible on any machine.
-constexpr int64_t kBlock = int64_t{1} << 16;
-
-// Worker threads: AUGAX_NUM_THREADS if set, else every hardware thread.
-unsigned num_threads() {
-  static const unsigned n = [] {
-    if (const char* env = std::getenv("AUGAX_NUM_THREADS")) {
-      long v = std::strtol(env, nullptr, 10);
-      if (v > 0) return static_cast<unsigned>(v);
-    }
-    unsigned hw = std::thread::hardware_concurrency();
-    return hw > 0 ? hw : 1u;
-  }();
-  return n;
-}
-
-// Run block(lo, len, seed) over [0, n).  An array of up to one block is one
-// stream seeded by `seed`.  A larger one is split into blocks, each with its own
-// stream, drawn in parallel: the draws are independent, and at the sizes of
-// large count models (millions of cells, most with h < 1 and so the 21-Gamma
-// series) a single thread is the whole Gibbs sweep's bottleneck.
-template <class Block>
-void for_blocks(int64_t n, uint64_t seed, Block block) {
-  if (n <= kBlock) {
-    block(0, n, seed);
-    return;
-  }
-  const int64_t blocks = (n + kBlock - 1) / kBlock;
-  auto run_block = [&](int64_t b) {
-    const int64_t lo = b * kBlock;
-    const int64_t len = std::min(kBlock, n - lo);
-    uint64_t s = seed ^ (0xD1B54A32D192ED03ULL * static_cast<uint64_t>(b + 1));
-    block(lo, len, s);
-  };
-  const unsigned T =
-      static_cast<unsigned>(std::min<int64_t>(num_threads(), blocks));
-  if (T <= 1) {
-    for (int64_t b = 0; b < blocks; ++b) run_block(b);
-    return;
-  }
-  std::atomic<int64_t> next{0};
-  auto worker = [&] {
-    for (int64_t b; (b = next.fetch_add(1)) < blocks;) run_block(b);
-  };
-  std::vector<std::thread> pool;
-  pool.reserve(T - 1);
-  for (unsigned t = 1; t < T; ++t) pool.emplace_back(worker);
-  worker();
-  for (auto& th : pool) th.join();
-}
-
-// Draw omega[i] ~ PG(h[i], z[i]) for i in [0, n).
-void draw_range(const double* h, const double* z, int64_t n, uint64_t seed,
-                double* out) {
-  for_blocks(n, seed, [&](int64_t lo, int64_t len, uint64_t s) {
-    draw_serial(h + lo, z + lo, len, s, out + lo);
-  });
+  return sample_pg_series(h, z, rng);
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,9 +545,14 @@ inline bool ks_accept(double v, double U) {
 // joins the acceptance; above it the IG proposal's 1/|u| mean stays finite.
 constexpr double KS_SMALL_U = 1e-4;
 
-// One draw of lam = sqrt(v) given eps = u.
+// One draw of lam = sqrt(v) given eps = u.  Past KS_HUGE_U, v is |u| to double
+// precision.
+constexpr double KS_HUGE_U = 1e100;
+
 inline double sample_ks_scale(double u, Rng& rng) {
   const double r = std::fabs(u);
+  if (std::isnan(r)) return NOT_A_NUMBER;
+  if (r > KS_HUGE_U) return std::sqrt(r);
   for (;;) {
     double v;
     if (r < KS_SMALL_U) {
@@ -1028,158 +560,422 @@ inline double sample_ks_scale(double u, Rng& rng) {
       v = y * y;
       if (rng.unif() > std::exp(-0.5 * r * r / v)) continue;
     } else {
-      // w = 1/v ~ IG(mu = 1/r, 1) (Michael, Schucany & Haas 1976), with
-      // mu y - sqrt(mu^2 y^2 + 4 mu y) rewritten to avoid cancellation.
-      const double mu = 1.0 / r;
-      const double y = rng.normal();
-      const double muy = mu * y * y;
-      double w = mu * (1.0 - 2.0 * muy / (muy + std::sqrt(muy * muy + 4.0 * muy)));
-      if (rng.unif() > mu / (mu + w)) w = mu * mu / w;
-      v = 1.0 / w;
+      // 1 / v ~ IG(1 / |u|, 1)
+      v = r / inverse_gaussian_ratio(1.0 / r, rng);
     }
     if (ks_accept(v, rng.unif())) return std::sqrt(v);
   }
 }
 
-// Draw lam[i] given u[i] for i in [0, n).
-void draw_ks_range(const double* u, int64_t n, uint64_t seed, double* out) {
-  for_blocks(n, seed, [&](int64_t lo, int64_t len, uint64_t s) {
-    Rng rng(s);
-    for (int64_t i = 0; i < len; ++i) out[lo + i] = sample_ks_scale(u[lo + i], rng);
-  });
+// ---------------------------------------------------------------------------
+// The Chinese restaurant table count (Zhou & Carin 2015): the tables y customers
+// occupy at concentration r,
+//
+//   L = sum_{n = 0}^{y - 1} Bernoulli(r / (r + n)),
+//
+// which augments the Negative-Binomial dispersion to a conjugate gamma update.
+//
+// While the probabilities are large, draw them one at a time.  Once they are small,
+// thin: since they only fall, the next success of a Bernoulli(p_n) process from
+// customer n is a candidate for any customer m >= n, kept with probability
+// p_m / p_n = (r + n) / (r + m), and the geometric gap skips the customers between.
+// ---------------------------------------------------------------------------
+inline double sample_crt(double y, double r, Rng& rng) {
+  if (!(y >= 0.0) || !(r > 0.0) || std::isinf(r) || y > 9007199254740992.0 ||
+      y != std::floor(y))
+    return NOT_A_NUMBER;
+  double tables = 0.0;
+  double n = 0.0;
+  for (; n < y && r > 0.1 * (r + n); n += 1.0)
+    if (rng.unif() * (r + n) < r) tables += 1.0;
+  while (n < y) {
+    const double m = n + std::floor(std::log(rng.unif()) / std::log1p(-r / (r + n)));
+    if (m >= y) break;
+    if (rng.unif() * (r + m) < r + n) tables += 1.0;
+    n = m + 1.0;
+  }
+  return tables;
+}
+
+// ---------------------------------------------------------------------------
+// The generalized inverse Gaussian: density proportional to
+// x^(p - 1) exp(-(a x + b / x) / 2).
+//
+// 1 / GIG(p, a, b) is GIG(-p, b, a), so take p >= 0.  On the log scale, centred at
+// the mode, x = (2 A / a) exp(y) and y has density proportional to exp(-D(y)), where
+//
+//   D(y) = A phi(y) + B phi(-y),   phi(y) = exp(y) - 1 - y,
+//   A = (rho + p) / 2,   B = (rho - p) / 2 = a b / (4 A),   rho = sqrt(a b + p^2).
+//
+// D is convex with minimum 0 at y = 0 for every parameter, so the rejection sampler for
+// log-concave densities applies uniformly (Devroye 2014): the envelope is 1 in the
+// middle and, on either side, the tangent to -D where D reaches about 1.  It also covers
+// the gamma and inverse-gamma limits, where B = 0 and x stays finite.
+// ---------------------------------------------------------------------------
+struct LogGig {
+  double A, B;
+  static double phi(double y) {
+    return std::fabs(y) < 0.01 ? y * y * (0.5 + y * (1.0 / 6.0 + y / 24.0))
+                               : std::expm1(y) - y;
+  }
+  double drop(double y) const {
+    return A * phi(y) + (B > 0.0 ? B * phi(-y) : 0.0);
+  }
+  double slope(double y) const {
+    return A * std::expm1(y) - (B > 0.0 ? B * std::expm1(-y) : 0.0);
+  }
+  // The distance along `sign` at which D reaches about 1, by Newton's method inside a
+  // bracket.  D need only be near 1: the point tunes efficiency, not correctness.
+  double reach(double sign) const {
+    double lo = 0.0, hi = std::numeric_limits<double>::infinity();
+    double x = 2.0 * std::asinh(std::sqrt(0.5 / (A + B)));
+    for (int i = 0; i < 64; ++i) {
+      const double excess = drop(sign * x) - 1.0;
+      if (std::fabs(excess) < 0.25) break;
+      (excess < 0.0 ? lo : hi) = x;
+      double next = x - excess / (sign * slope(sign * x));
+      if (!(next > lo && next < hi))
+        next = std::isinf(hi) ? 2.0 * x : 0.5 * (lo + hi);
+      x = next;
+    }
+    return x;
+  }
+  double draw(Rng& rng) const {
+    const double t = reach(1.0), s = reach(-1.0);
+    const double right = 1.0 / slope(t), left = -1.0 / slope(-s);
+    const double t0 = std::max(t - drop(t) * right, 0.0);
+    const double s0 = std::max(s - drop(-s) * left, 0.0);
+    const double middle = t0 + s0;
+    const double total = middle + right + left;
+    for (;;) {
+      const double u = rng.unif() * total;
+      double y, envelope = 0.0;  // envelope is the log of the envelope at y
+      if (u < middle) {
+        y = u - s0;
+      } else {
+        const double e = rng.expon();
+        y = u < middle + right ? t0 + right * e : -s0 - left * e;
+        envelope = -e;
+      }
+      if (rng.expon() >= envelope + drop(y)) return y;
+    }
+  }
+};
+
+inline double sample_gig(double p, double a, double b, Rng& rng) {
+  if (!std::isfinite(p) || !std::isfinite(a) || !std::isfinite(b) || !(a >= 0.0) ||
+      !(b >= 0.0))
+    return NOT_A_NUMBER;
+  if ((p >= 0.0 && a == 0.0) || (p <= 0.0 && b == 0.0)) return NOT_A_NUMBER;
+  const double q = std::fabs(p);
+  const double omega = std::sqrt(a) * std::sqrt(b);
+  const double A = 0.5 * std::hypot(omega, q) + 0.5 * q;
+  const LogGig law{A, 0.5 * omega * (0.5 * omega / A)};
+  const double y = law.draw(rng);
+  return p >= 0.0 ? 2.0 * (A / a) * std::exp(y) : 0.5 * (b / A) * std::exp(-y);
+}
+
+// Each sampler as the scheduler sees it: N parameters per element.
+struct DrawPg {
+  static constexpr int N = 2;
+  // The floor keeps omega usable as a precision; a NaN passes through it.
+  static double draw(const double* a, Rng& rng) {
+    return std::max(sample_pg(a[0], a[1], rng), 1e-12);
+  }
+};
+
+struct DrawKs {
+  static constexpr int N = 1;
+  static double draw(const double* a, Rng& rng) {
+    return sample_ks_scale(a[0], rng);
+  }
+};
+
+struct DrawCrt {
+  static constexpr int N = 2;
+  static double draw(const double* a, Rng& rng) {
+    return sample_crt(a[0], a[1], rng);
+  }
+};
+
+struct DrawGig {
+  static constexpr int N = 3;
+  static double draw(const double* a, Rng& rng) {
+    return sample_gig(a[0], a[1], a[2], rng);
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Scheduling
+//
+// A call draws for `keys` PRNG keys, each owning `n` consecutive elements: one key
+// for a plain call, one per row under vmap.  A key's elements form one stream if
+// there are at most kBlock of them, and otherwise one stream per block.  Streams
+// therefore depend on the key and on n alone, never on the thread count or on the
+// keys alongside, so vmap(f)(keys)[i] equals f(keys[i]).
+//
+// Those streams are the tasks, and any free thread takes the next few, so chains
+// parallelize exactly as one long array does.
+// ---------------------------------------------------------------------------
+
+// Elements per independently seeded block.
+constexpr int64_t kBlock = int64_t{1} << 16;
+
+// Worker threads: AUGAX_NUM_THREADS if set, else every hardware thread.
+unsigned num_threads() {
+  static const unsigned n = [] {
+    if (const char* env = std::getenv("AUGAX_NUM_THREADS")) {
+      long v = std::strtol(env, nullptr, 10);
+      if (v > 0) return static_cast<unsigned>(v);
+    }
+    unsigned hw = std::thread::hardware_concurrency();
+    return hw > 0 ? hw : 1u;
+  }();
+  return n;
+}
+
+// One 64-bit seed from all the words of a key, whatever their number.
+inline uint64_t seed_from_key(const uint32_t* words, int64_t nwords) {
+  uint64_t s = 0x9E3779B97F4A7C15ULL;
+  for (int64_t i = 0; i < nwords; ++i) {
+    uint64_t x = s ^ words[i];
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    s = x ^ (x >> 31);
+  }
+  return s;
+}
+
+struct Claims {
+  std::atomic<int64_t> next{0};
+  std::atomic<int64_t> done{0};
+};
+
+// Run tasks from the shared counter until none are left.
+template <class Task>
+void work_off(Claims& claims, int64_t tasks, int64_t grain, const Task& task) {
+  for (;;) {
+    const int64_t lo = claims.next.fetch_add(grain, std::memory_order_relaxed);
+    if (lo >= tasks) return;
+    const int64_t hi = std::min(lo + grain, tasks);
+    for (int64_t i = lo; i < hi; ++i) task(i);
+    claims.done.fetch_add(hi - lo, std::memory_order_release);
+  }
+}
+
+// Host callers have no XLA pool, so they get threads of their own.
+struct OwnThreads {
+  template <class Task>
+  void operator()(int64_t tasks, int64_t grain, int64_t workers,
+                  const Task& task) const {
+    Claims claims;
+    std::vector<std::thread> pool;
+    pool.reserve(workers - 1);
+    try {
+      for (int64_t w = 1; w < workers; ++w)
+        pool.emplace_back([&] { work_off(claims, tasks, grain, task); });
+    } catch (const std::system_error&) {
+      // Out of threads: those that started, and this one, finish the work.
+    }
+    work_off(claims, tasks, grain, task);
+    for (auto& th : pool) th.join();
+  }
+};
+
+// XLA's intra-op pool, so several devices share one pool rather than each starting
+// its own.  This thread may belong to that pool, so it must not wait on queued
+// helpers: it works until no task is unclaimed and then waits only for tasks a
+// helper has already claimed.  A helper that starts after this returns finds no
+// tasks and never touches `task`, which is why only `claims` is kept alive for it.
+struct XlaPool {
+  ffi::ThreadPool& pool;
+  template <class Task>
+  void operator()(int64_t tasks, int64_t grain, int64_t workers,
+                  const Task& task) const {
+    auto claims = std::make_shared<Claims>();
+    const int64_t helpers = std::min<int64_t>(workers, pool.num_threads()) - 1;
+    for (int64_t w = 0; w < helpers; ++w)
+      pool.Schedule([claims, tasks, grain, &task] {
+        work_off(*claims, tasks, grain, task);
+      });
+    work_off(*claims, tasks, grain, task);
+    while (claims->done.load(std::memory_order_acquire) < tasks)
+      std::this_thread::yield();
+  }
+};
+
+template <class Draw, class T, class Run>
+void draw_all(const std::array<const T*, Draw::N>& params, const uint32_t* words,
+              int64_t nwords, int64_t keys, int64_t total, T* out, Run run) {
+  if (total == 0) return;
+  const int64_t n = total / keys;
+  const int64_t blocks = (n + kBlock - 1) / kBlock;
+  auto task = [&](int64_t t) {
+    const int64_t key = t / blocks;
+    const int64_t block = t % blocks;
+    uint64_t seed = seed_from_key(words + key * nwords, nwords);
+    if (blocks > 1)
+      seed ^= 0xD1B54A32D192ED03ULL * static_cast<uint64_t>(block + 1);
+    Rng rng(seed);
+    const int64_t lo = key * n + block * kBlock;
+    const int64_t hi = lo + std::min(kBlock, n - block * kBlock);
+    double a[Draw::N];
+    for (int64_t i = lo; i < hi; ++i) {
+      for (int j = 0; j < Draw::N; ++j) a[j] = static_cast<double>(params[j][i]);
+      out[i] = static_cast<T>(Draw::draw(a, rng));
+    }
+  };
+  const int64_t tasks = keys * blocks;
+  const int64_t workers =
+      std::min({static_cast<int64_t>(num_threads()), tasks, (total + kBlock - 1) / kBlock});
+  // Claim about a block's worth of elements at a time.
+  const int64_t grain = std::max<int64_t>(kBlock / n, 1);
+  if (workers <= 1) {
+    for (int64_t t = 0; t < tasks; ++t) task(t);
+    return;
+  }
+  run(tasks, grain, workers, task);
 }
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // FFI handlers
-//   pg_sample_f64(h[n], z[n], seed[]) -> omega[n]
-//   pg_sample_batched_f64(h[B,n], z[B,n], seed[B]) -> omega[B,n]
-// seed is an int64 buffer (scalar for the unbatched call, (B,) for the batch),
-// derived from the JAX PRNG key on the Python side.
+//
+//   <sampler>_<dtype>(seed[..., W], param[...], ...) -> draw[...]
+//
+// seed holds the words of the PRNG keys, W per key.  Any leading dimensions it has
+// are vmap's, and the parameters carry the same ones, so one handler serves a plain
+// call and every depth of vmap: the elements of one key are consecutive in memory.
 // ---------------------------------------------------------------------------
 
-static ffi::Error PgSampleF64Impl(ffi::Buffer<ffi::F64> h,
-                                  ffi::Buffer<ffi::F64> z,
-                                  ffi::Buffer<ffi::S64> seed,
-                                  ffi::ResultBuffer<ffi::F64> out) {
-  int64_t n = static_cast<int64_t>(h.element_count());
-  if (static_cast<int64_t>(z.element_count()) != n)
-    return ffi::Error::InvalidArgument("augax: h and z must have equal length");
-  uint64_t s = seed.element_count() > 0
-                   ? static_cast<uint64_t>(seed.typed_data()[0])
-                   : 0ULL;
-  draw_range(h.typed_data(), z.typed_data(), n, s, out->typed_data());
+using Seed = ffi::Buffer<ffi::U32>;
+
+template <class Draw, ffi::DataType DT, class... Params>
+static ffi::Error handle(Seed seed, ffi::ResultBuffer<DT>& out, ffi::ThreadPool& pool,
+                         Params... params) {
+  const auto dims = seed.dimensions();
+  if (dims.size() == 0 || dims[dims.size() - 1] <= 0)
+    return ffi::Error::InvalidArgument("augax: seed must end in the words of a key");
+  const int64_t nwords = dims[dims.size() - 1];
+  const int64_t keys = static_cast<int64_t>(seed.element_count()) / nwords;
+  const int64_t total = static_cast<int64_t>(out->element_count());
+  if (((static_cast<int64_t>(params.element_count()) != total) || ...))
+    return ffi::Error::InvalidArgument("augax: parameters must share one shape");
+  if (keys == 0) return ffi::Error::Success();
+  if (total % keys != 0)
+    return ffi::Error::InvalidArgument("augax: elements do not divide among the keys");
+  using T = std::remove_const_t<std::remove_pointer_t<decltype(out->typed_data())>>;
+  draw_all<Draw, T>({params.typed_data()...}, seed.typed_data(), nwords, keys, total,
+                    out->typed_data(), XlaPool{pool});
   return ffi::Error::Success();
 }
 
-XLA_FFI_DEFINE_HANDLER_SYMBOL(PgSampleF64, PgSampleF64Impl,
-                              ffi::Ffi::Bind()
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // h
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // z
-                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed
-                                  .Ret<ffi::Buffer<ffi::F64>>());
+#define AUGAX_TARGET_1(NAME, DRAW, DT)                                          \
+  static ffi::Error NAME##Impl(Seed seed, ffi::Buffer<DT> a,                    \
+                               ffi::ResultBuffer<DT> out, ffi::ThreadPool pool) { \
+    return handle<DRAW, DT>(seed, out, pool, a);                                \
+  }                                                                             \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(NAME, NAME##Impl,                               \
+                                ffi::Ffi::Bind()                                \
+                                    .Arg<Seed>()                                \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Ret<ffi::Buffer<DT>>()                     \
+                                    .Ctx<ffi::ThreadPool>());
 
-static ffi::Error PgSampleBatchedF64Impl(ffi::Buffer<ffi::F64> h,
-                                         ffi::Buffer<ffi::F64> z,
-                                         ffi::Buffer<ffi::S64> seed,
-                                         ffi::ResultBuffer<ffi::F64> out) {
-  auto d = h.dimensions();
-  if (d.size() < 2)
-    return ffi::Error::InvalidArgument("augax: batched h must be >= 2D");
-  int64_t batch = d[0];
-  int64_t n = static_cast<int64_t>(h.element_count()) / batch;
-  const int64_t* seeds = seed.typed_data();
-  int64_t nseed = static_cast<int64_t>(seed.element_count());
-  const double* hd = h.typed_data();
-  const double* zd = z.typed_data();
-  double* od = out->typed_data();
-  for (int64_t b = 0; b < batch; ++b) {
-    uint64_t s = static_cast<uint64_t>(seeds[nseed == batch ? b : 0]);
-    // Distinct stream per batch element even if a single seed was broadcast.
-    s ^= 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(b + 1);
-    draw_range(hd + b * n, zd + b * n, n, s, od + b * n);
+#define AUGAX_TARGET_2(NAME, DRAW, DT)                                          \
+  static ffi::Error NAME##Impl(Seed seed, ffi::Buffer<DT> a, ffi::Buffer<DT> b, \
+                               ffi::ResultBuffer<DT> out, ffi::ThreadPool pool) { \
+    return handle<DRAW, DT>(seed, out, pool, a, b);                             \
+  }                                                                             \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(NAME, NAME##Impl,                               \
+                                ffi::Ffi::Bind()                                \
+                                    .Arg<Seed>()                                \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Ret<ffi::Buffer<DT>>()                     \
+                                    .Ctx<ffi::ThreadPool>());
+
+#define AUGAX_TARGET_3(NAME, DRAW, DT)                                          \
+  static ffi::Error NAME##Impl(Seed seed, ffi::Buffer<DT> a, ffi::Buffer<DT> b, \
+                               ffi::Buffer<DT> c, ffi::ResultBuffer<DT> out,    \
+                               ffi::ThreadPool pool) {                          \
+    return handle<DRAW, DT>(seed, out, pool, a, b, c);                          \
+  }                                                                             \
+  XLA_FFI_DEFINE_HANDLER_SYMBOL(NAME, NAME##Impl,                               \
+                                ffi::Ffi::Bind()                                \
+                                    .Arg<Seed>()                                \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Arg<ffi::Buffer<DT>>()                     \
+                                    .Ret<ffi::Buffer<DT>>()                     \
+                                    .Ctx<ffi::ThreadPool>());
+
+AUGAX_TARGET_2(PgF64, DrawPg, ffi::F64)
+AUGAX_TARGET_2(PgF32, DrawPg, ffi::F32)
+AUGAX_TARGET_1(KsF64, DrawKs, ffi::F64)
+AUGAX_TARGET_1(KsF32, DrawKs, ffi::F32)
+AUGAX_TARGET_2(CrtF64, DrawCrt, ffi::F64)
+AUGAX_TARGET_2(CrtF32, DrawCrt, ffi::F32)
+AUGAX_TARGET_3(GigF64, DrawGig, ffi::F64)
+AUGAX_TARGET_3(GigF32, DrawGig, ffi::F32)
+
+// ---------------------------------------------------------------------------
+// Host entry points: the same draws for NumPy callers, one row of seed per key.
+// ---------------------------------------------------------------------------
+
+using HostSeed = nb::ndarray<const uint32_t, nb::ndim<2>, nb::c_contig, nb::device::cpu>;
+using HostParam = nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu>;
+
+template <class Draw, class... Params>
+static nb::ndarray<nb::numpy, double, nb::ndim<1>> host_draw(HostSeed seed,
+                                                             Params... params) {
+  const std::array<HostParam, Draw::N> all{params...};
+  const int64_t total = static_cast<int64_t>(all[0].shape(0));
+  const int64_t keys = static_cast<int64_t>(seed.shape(0));
+  const int64_t nwords = static_cast<int64_t>(seed.shape(1));
+  for (const auto& p : all)
+    if (static_cast<int64_t>(p.shape(0)) != total)
+      throw nb::value_error("augax: parameters must share one shape");
+  if (nwords == 0 || keys == 0 || total % keys != 0)
+    throw nb::value_error("augax: elements do not divide among the keys");
+  double* out = new double[total > 0 ? total : 1];
+  std::array<const double*, Draw::N> data;
+  for (int j = 0; j < Draw::N; ++j) data[j] = all[j].data();
+  {
+    nb::gil_scoped_release release;
+    draw_all<Draw, double>(data, seed.data(), nwords, keys, total, out, OwnThreads{});
   }
-  return ffi::Error::Success();
+  nb::capsule owner(out, [](void* p) noexcept { delete[] static_cast<double*>(p); });
+  return nb::ndarray<nb::numpy, double, nb::ndim<1>>(out, {static_cast<size_t>(total)},
+                                                     owner);
 }
 
-XLA_FFI_DEFINE_HANDLER_SYMBOL(PgSampleBatchedF64, PgSampleBatchedF64Impl,
-                              ffi::Ffi::Bind()
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // h [B,n]
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // z [B,n]
-                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed [B]
-                                  .Ret<ffi::Buffer<ffi::F64>>());
-
-// ks_sample_f64(u[n], seed[]) -> lam[n]
-// ks_sample_batched_f64(u[B,n], seed[B]) -> lam[B,n]
-static ffi::Error KsSampleF64Impl(ffi::Buffer<ffi::F64> u,
-                                  ffi::Buffer<ffi::S64> seed,
-                                  ffi::ResultBuffer<ffi::F64> out) {
-  uint64_t s = seed.element_count() > 0
-                   ? static_cast<uint64_t>(seed.typed_data()[0])
-                   : 0ULL;
-  draw_ks_range(u.typed_data(), static_cast<int64_t>(u.element_count()), s,
-                out->typed_data());
-  return ffi::Error::Success();
-}
-
-XLA_FFI_DEFINE_HANDLER_SYMBOL(KsSampleF64, KsSampleF64Impl,
-                              ffi::Ffi::Bind()
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // u
-                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed
-                                  .Ret<ffi::Buffer<ffi::F64>>());
-
-static ffi::Error KsSampleBatchedF64Impl(ffi::Buffer<ffi::F64> u,
-                                         ffi::Buffer<ffi::S64> seed,
-                                         ffi::ResultBuffer<ffi::F64> out) {
-  auto d = u.dimensions();
-  if (d.size() < 2)
-    return ffi::Error::InvalidArgument("augax: batched u must be >= 2D");
-  int64_t batch = d[0];
-  int64_t n = static_cast<int64_t>(u.element_count()) / batch;
-  const int64_t* seeds = seed.typed_data();
-  int64_t nseed = static_cast<int64_t>(seed.element_count());
-  for (int64_t b = 0; b < batch; ++b) {
-    uint64_t s = static_cast<uint64_t>(seeds[nseed == batch ? b : 0]);
-    s ^= 0x9E3779B97F4A7C15ULL * static_cast<uint64_t>(b + 1);
-    draw_ks_range(u.typed_data() + b * n, n, s, out->typed_data() + b * n);
-  }
-  return ffi::Error::Success();
-}
-
-XLA_FFI_DEFINE_HANDLER_SYMBOL(KsSampleBatchedF64, KsSampleBatchedF64Impl,
-                              ffi::Ffi::Bind()
-                                  .Arg<ffi::Buffer<ffi::F64>>()  // u [B,n]
-                                  .Arg<ffi::Buffer<ffi::S64>>()  // seed [B]
-                                  .Ret<ffi::Buffer<ffi::F64>>());
-
-NB_MODULE(augax_cpp, m) {
-  m.doc() = "On-device augmentation draws as XLA FFI custom calls";
-  m.def("pg_sample_f64_capsule", []() {
-    return nb::capsule(reinterpret_cast<void*>(PgSampleF64));
+NB_MODULE(_cpp, m) {
+  m.doc() = "Augmentation draws as XLA FFI custom calls and for host callers";
+  m.def("ffi_targets", [] {
+    nb::dict targets;
+#define AUGAX_EXPORT(KEY, NAME) targets[KEY] = nb::capsule(reinterpret_cast<void*>(NAME))
+    AUGAX_EXPORT("pg_float64", PgF64);
+    AUGAX_EXPORT("pg_float32", PgF32);
+    AUGAX_EXPORT("ks_float64", KsF64);
+    AUGAX_EXPORT("ks_float32", KsF32);
+    AUGAX_EXPORT("crt_float64", CrtF64);
+    AUGAX_EXPORT("crt_float32", CrtF32);
+    AUGAX_EXPORT("gig_float64", GigF64);
+    AUGAX_EXPORT("gig_float32", GigF32);
+#undef AUGAX_EXPORT
+    return targets;
   });
-  m.def("pg_sample_batched_f64_capsule", []() {
-    return nb::capsule(reinterpret_cast<void*>(PgSampleBatchedF64));
+  m.def("pg_host", &host_draw<DrawPg, HostParam, HostParam>);
+  // The numbers behind a sum-of-gammas draw, for the test that bounds its distance from
+  // the exact law.
+  m.def("pg_series_parameters", [](double h, double z) {
+    const int K = pg_series_terms(h);
+    const PgRemainder rest = pg_series_remainder(h, 0.5 * std::fabs(z), K);
+    return nb::make_tuple(K, rest.shift, rest.mu, rest.psi);
   });
-  m.def("ks_sample_f64_capsule", []() {
-    return nb::capsule(reinterpret_cast<void*>(KsSampleF64));
-  });
-  m.def("ks_sample_batched_f64_capsule", []() {
-    return nb::capsule(reinterpret_cast<void*>(KsSampleBatchedF64));
-  });
-  // The same KS draw for host (NumPy) callers: lam given u, from one seed.
-  m.def(
-      "ks_sample_host",
-      [](nb::ndarray<const double, nb::ndim<1>, nb::c_contig, nb::device::cpu> u,
-         uint64_t seed) {
-        const int64_t n = static_cast<int64_t>(u.shape(0));
-        double* out = new double[n > 0 ? n : 1];
-        {
-          nb::gil_scoped_release release;
-          draw_ks_range(u.data(), n, seed, out);
-        }
-        nb::capsule owner(out, [](void* p) noexcept { delete[] static_cast<double*>(p); });
-        return nb::ndarray<nb::numpy, double, nb::ndim<1>>(out, {static_cast<size_t>(n)}, owner);
-      },
-      nb::arg("u"), nb::arg("seed"));
+  m.def("ks_host", &host_draw<DrawKs, HostParam>);
+  m.def("crt_host", &host_draw<DrawCrt, HostParam, HostParam>);
+  m.def("gig_host", &host_draw<DrawGig, HostParam, HostParam, HostParam>);
 }

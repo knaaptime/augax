@@ -2,19 +2,35 @@
 
 augax is self-contained C++, so its wheel should bundle no shared libraries at
 all; a bundled OpenMP runtime in particular can abort a process that loads
-another one.  Then check the sampler loads and draws from the right law.
+another one.  Then check that every sampler loads, in both precisions, and that
+Pólya-Gamma draws from the right law.
 """
 
 import pathlib
 import sys
 
 import jax
-
-jax.config.update("jax_enable_x64", True)
-
 import jax.numpy as jnp
 import numpy as np
+
 import augax
+
+
+def check_samplers(dtype):
+    key = jax.random.key(0)
+    draws = [
+        augax.pg_sample(jnp.ones(4), jnp.zeros(4), key),
+        augax.ks_sample(jnp.ones(4), key),
+        augax.crt_sample(jnp.full(4, 7.0), 1.5, key),
+        augax.gig_sample(0.5, 1.0, jnp.ones(4), key),
+    ]
+    for x in draws:
+        assert x.dtype == dtype and x.shape == (4,) and bool(jnp.all(x > 0))
+
+
+check_samplers(jnp.float32)  # the default, without x64
+jax.config.update("jax_enable_x64", True)
+check_samplers(jnp.float64)
 
 root = pathlib.Path(augax.__file__).resolve().parent
 bundled = [
