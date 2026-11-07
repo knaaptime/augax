@@ -1,6 +1,6 @@
 # Installation
 
-`augax` supports Python >= 3.11. We recommend using [miniforge] or [pixi].
+`augax` supports Python >= 3.12. We recommend using [miniforge] or [pixi].
 
 ## Installing a released version
 
