@@ -11,12 +11,12 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.abspath("../../src"))
 
 # Mock the native C++ extension so augax can be imported without a build.
-sys.modules.setdefault("augax_cpp", MagicMock())
+sys.modules.setdefault("augax._cpp", MagicMock())
 
 import augax  # noqa: E402
 
 project = "augax"
-copyright = "2024-, augax developers"  # noqa: A001
+copyright = "2026-, augax developers"  # noqa: A001
 author = "augax developers"
 
 version = augax.__version__
@@ -47,9 +47,6 @@ myst_enable_extensions = [
     "dollarmath",
     "html_image",
 ]
-
-# Mock the native C++ extension so autodoc can import augax without a build.
-autodoc_mock_imports = ["augax_cpp"]
 
 bibtex_bibfiles = ["_static/references.bib"]
 bibtex_reference_style = "author_year"

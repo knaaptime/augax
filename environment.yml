@@ -13,4 +13,5 @@ dependencies:
   - cmake
   - scikit-build-core
   - pytest
+  - pytest-timeout
   - cxx-compiler

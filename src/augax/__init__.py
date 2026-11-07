@@ -1,42 +1,42 @@
-"""augax: on-device draws for conditionally Gaussian augmentation, in JAX.
+"""augax: native draws for conditionally Gaussian augmentation, in JAX.
 
-Each primitive is an XLA FFI custom call that samples one augmentation
-variable inside ``@jax.jit`` / ``lax.scan``.  It ships one:
+Each sampler is an XLA FFI custom call that draws its augmentation variable inside
+``@jax.jit`` / ``lax.scan`` with no host round-trip, the native replacement for a
+``jax.pure_callback`` that taxes every Gibbs sweep.
 
 ``pg_sample``
     Pólya–Gamma, ``omega ~ PG(h, z)``, for the logit and negative-binomial
     likelihoods (Polson, Scott & Windle 2013).
 ``ks_sample``
-    The Kolmogorov scale of a logistic disturbance, ``lam | eps``, which makes
-    the logistic a normal scale mixture (Stefanski 1991; Holmes & Held 2006).
-    :func:`ks_sample_numpy` is the same draw for host (NumPy) callers.
+    The Kolmogorov scale of a logistic disturbance, ``lam | eps``, which makes the
+    logistic a normal scale mixture (Stefanski 1991; Holmes & Held 2006).
+``crt_sample``
+    The Chinese restaurant table count, which makes a negative-binomial dispersion
+    conjugate to a gamma (Zhou & Carin 2015).
+``gig_sample``
+    The generalized inverse Gaussian, the scale of the normal mixtures behind the
+    lasso, quantile regression and the generalized hyperbolic family.
 
-Draw ``omega ~ PG(h, z)`` from inside ``@jax.jit`` / ``lax.scan`` with no host
-round-trip — the native replacement for ``jax.pure_callback(random_polyagamma)``
-that taxes every Gibbs sweep (and serializes under ``jax.pmap``).
-
-Draws follow the hybrid scheme of ``polyagamma``'s ``random_polyagamma``
-(``method=None``): exact Devroye draws for the Bernoulli/logit augmentation
-(``h = 1``), the exact alternate sampler for other real ``h`` below the
-saddlepoint region — e.g. the Negative-Binomial ``h = y + alpha`` — a
-saddlepoint rejection sampler for larger ``h``, and a moment-matched normal above
-``h = 50`` (see the README).
+Each has a ``*_numpy`` twin that makes the same draws for NumPy callers, and
+:func:`pg_mean` and :func:`pg_var` give the Pólya–Gamma moments in closed form.
 
 Example::
 
     import jax, augax
-    jax.config.update("jax_enable_x64", True)
 
     @jax.jit
-    def step(h, z, key):
-        return augax.pg_sample(h, z, key)   # on-device PG draw
+    def step(z, key):
+        return augax.pg_sample(1.0, z, key)
 """
+
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.typing import ArrayLike
 
-import augax_cpp as _cpp
+from . import _cpp
 
 try:
     # Single source of truth: the version in the git tag, via the installed
@@ -46,168 +46,191 @@ try:
     __version__ = _dist_version("augax")
 except Exception:  # running from a source tree that was never installed
     __version__ = "0+unknown"
-__all__ = ["pg_sample", "ks_sample", "ks_sample_numpy"]
+__all__ = [
+    "pg_sample",
+    "pg_sample_numpy",
+    "pg_mean",
+    "pg_var",
+    "ks_sample",
+    "ks_sample_numpy",
+    "crt_sample",
+    "crt_sample_numpy",
+    "gig_sample",
+    "gig_sample_numpy",
+]
 
-jax.ffi.register_ffi_target(
-    "augax_pg_sample_f64", _cpp.pg_sample_f64_capsule(), platform="cpu"
-)
-jax.ffi.register_ffi_target(
-    "augax_pg_sample_batched_f64", _cpp.pg_sample_batched_f64_capsule(), platform="cpu"
-)
-jax.ffi.register_ffi_target(
-    "augax_ks_sample_f64", _cpp.ks_sample_f64_capsule(), platform="cpu"
-)
-jax.ffi.register_ffi_target(
-    "augax_ks_sample_batched_f64", _cpp.ks_sample_batched_f64_capsule(), platform="cpu"
-)
+for _name, _capsule in _cpp.ffi_targets().items():
+    jax.ffi.register_ffi_target(f"augax_{_name}", _capsule, platform="cpu")
 
 
-def _require_x64():
-    if not jax.config.jax_enable_x64:
-        raise RuntimeError(
-            'augax requires 64-bit mode: jax.config.update("jax_enable_x64", True)'
+def _host_draw(name, seed, *params):
+    """The native draw on the host, for any leading batch dimensions."""
+    seed = np.asarray(seed, dtype=np.uint32)
+    params = [np.asarray(p) for p in params]
+    flat = [np.ascontiguousarray(p, dtype=np.float64).reshape(-1) for p in params]
+    draw = getattr(_cpp, f"{name}_host")
+    out = draw(seed.reshape(-1, seed.shape[-1]), *flat)
+    return out.reshape(params[0].shape).astype(params[0].dtype)
+
+
+def _native(name):
+    """A sampler as one native call, whatever the depth of ``vmap`` around it.
+
+    ``seed`` is ``(..., W)``, the words of the keys, and every parameter is
+    ``(..., *event)``, with the same leading dimensions.  ``vmap`` only adds one,
+    which the native call already understands.
+
+    The FFI target exists on CPU only.  Elsewhere the draw runs on the host through
+    a callback, which gives the same numbers at the price of a round-trip.
+    ``platform_dependent`` compiles only the branch for the platform at hand, and the
+    ``jit`` makes that hold for eager calls too.
+    """
+
+    @jax.jit
+    def dispatch(seed, *params):
+        result = jax.ShapeDtypeStruct(params[0].shape, params[0].dtype)
+
+        def on_cpu(seed, *params):
+            target = f"augax_{name}_{params[0].dtype.name}"
+            return jax.ffi.ffi_call(target, result)(seed, *params)
+
+        def elsewhere(seed, *params):
+            return jax.pure_callback(partial(_host_draw, name), result, seed, *params)
+
+        return jax.lax.platform_dependent(seed, *params, cpu=on_cpu, default=elsewhere)
+
+    @jax.custom_batching.custom_vmap
+    def draw(seed, *params):
+        return dispatch(seed, *params)
+
+    @draw.def_vmap
+    def draw_vmap(axis_size, in_batched, *args):
+        args = [
+            x if batched else jnp.broadcast_to(x, (axis_size,) + x.shape)
+            for x, batched in zip(args, in_batched)
+        ]
+        return draw(*args), True
+
+    return draw
+
+
+_pg = _native("pg")
+_ks = _native("ks")
+_crt = _native("crt")
+_gig = _native("gig")
+
+
+def _key_words(key):
+    """The words of one PRNG key, for the native seed."""
+    words = jax.random.key_data(key)
+    if words.ndim != 1:
+        raise ValueError(
+            "expected a single PRNG key; use jax.vmap to draw over a batch of keys, "
+            f"got key data of shape {words.shape}"
         )
+    return words.astype(jnp.uint32)
 
 
-def _seed_from_key(key):
-    """Derive an int64 RNG seed from a JAX PRNG key (per-key, reproducible)."""
-    kd = jax.random.key_data(key).ravel().astype(jnp.int64)
-    # Combine the key words for a bit more entropy; kept non-negative-ish (the
-    # C++ RNG treats it as an unsigned 64-bit seed).
-    seed = kd[0]
-    if kd.shape[0] > 1:
-        seed = seed ^ (kd[1] << jnp.int64(23))
-    return seed
+def _params(shape, *params):
+    """Parameters as floating arrays broadcast to one shape."""
+    dtype = jax.dtypes.canonicalize_dtype(jnp.float64)
+    params = [jnp.asarray(p, dtype) for p in params]
+    if shape is None:
+        shape = jnp.broadcast_shapes(*(p.shape for p in params))
+    return [jnp.broadcast_to(p, shape) for p in params]
 
 
-@jax.custom_batching.custom_vmap
-def _sample_batched(h, z, seed):
-    """One FFI call for a batch: ``h``, ``z`` are ``(B, ...)``, ``seed`` is ``(B,)``."""
-    call = jax.ffi.ffi_call(
-        "augax_pg_sample_batched_f64", jax.ShapeDtypeStruct(h.shape, h.dtype)
-    )
-    return call(h, z, seed)
+def _host_sample(name, rng, shape, *params):
+    """A NumPy draw: the native sampler with its seed from ``rng``."""
+    params = [np.asarray(p, dtype=np.float64) for p in params]
+    if shape is None:
+        shape = np.broadcast_shapes(*(p.shape for p in params))
+    params = [np.broadcast_to(p, shape) for p in params]
+    seed = rng.integers(0, 2**32, size=(1, 2), dtype=np.uint32)
+    return _host_draw(name, seed, *params)
 
 
-@_sample_batched.def_vmap
-def _sample_batched_vmap(axis_size, in_batched, h, z, seed):
-    # A further vmap over an already-batched call: merge the outer axis into
-    # the batch axis, so any depth of nesting is still one native call.
-    # Without this rule the raw batched ffi_call has no batching rule and
-    # vmap-of-vmap fails.
-    h_b, z_b, seed_b = in_batched
-    if not h_b:
-        h = jnp.broadcast_to(h, (axis_size,) + h.shape)
-    if not z_b:
-        z = jnp.broadcast_to(z, (axis_size,) + z.shape)
-    if not seed_b:
-        seed = jnp.broadcast_to(seed, (axis_size,) + seed.shape)
-    outer, inner = h.shape[0], h.shape[1]
-    out = _sample_batched(
-        h.reshape((outer * inner,) + h.shape[2:]),
-        z.reshape((outer * inner,) + z.shape[2:]),
-        seed.reshape(outer * inner),
-    )
-    return out.reshape((outer, inner) + out.shape[1:]), True
+def pg_sample(
+    h: ArrayLike, z: ArrayLike, key: jax.Array, *, shape: tuple[int, ...] | None = None
+) -> jax.Array:
+    """Draw ``omega ~ PG(h, z)`` element-wise.
 
-
-@jax.custom_batching.custom_vmap
-def _dispatch(h, z, seed):
-    call = jax.ffi.ffi_call(
-        "augax_pg_sample_f64", jax.ShapeDtypeStruct(h.shape, h.dtype)
-    )
-    return call(h, z, seed)
-
-
-@_dispatch.def_vmap
-def _dispatch_vmap(axis_size, in_batched, h, z, seed):
-    h_b, z_b, seed_b = in_batched
-    if not h_b:
-        h = jnp.broadcast_to(h, (axis_size,) + h.shape)
-    if not z_b:
-        z = jnp.broadcast_to(z, (axis_size,) + z.shape)
-    if not seed_b:
-        seed = jnp.broadcast_to(seed, (axis_size,))
-    return _sample_batched(h, z, seed), True
-
-
-def pg_sample(h, z, key):
-    """Draw ``omega ~ PG(h, z)`` element-wise, on-device.
+    The sampler is chosen from ``(h, z)`` element by element (see the README).  Each is
+    exact or within ``1e-6`` of the exact law in Kolmogorov distance, for ``h >= 0.03``.
 
     Parameters
     ----------
     h : array_like
-        Shape ``[n]`` float64. PG shape (h = 1 for Bernoulli/logit; positive
-        integer for the exact sum-of-Devroye path).
+        PG shape: 1 for the logit, ``y + alpha`` for the negative binomial.
     z : array_like
-        Shape ``[n]`` float64. PG tilt (the linear predictor).
+        PG tilt, the linear predictor.  Broadcast against ``h``.
     key : jax.Array
-        A JAX PRNG key. ``vmap`` over a batch of keys draws each element's
-        batch with its own RNG stream.
+        One JAX PRNG key.  To draw for several chains, ``vmap`` over a batch of keys:
+        ``vmap(f)(keys)[i]`` equals ``f(keys[i])``.
+    shape : tuple of int, optional
+        The shape of the result, to which ``h`` and ``z`` broadcast.  Defaults to their
+        broadcast shape.
 
     Returns
     -------
     omega : jax.Array
-        Draws from ``PG(h, z)`` with the same shape as ``h``.
+        The draws, floored at ``1e-12`` so that they are usable as precisions.  An
+        invalid parameter (NaN, ``h < 0`` or an infinite ``h``) draws NaN.
     """
-    _require_x64()
-    h = jnp.asarray(h, jnp.float64)
-    z = jnp.asarray(z, jnp.float64)
-    if h.shape != z.shape:
-        raise ValueError(f"h and z must have the same shape, got {h.shape}, {z.shape}")
-    seed = _seed_from_key(key)
-    return _dispatch(h, z, seed)
+    return _pg(_key_words(key), *_params(shape, h, z))
 
 
-# ---------------------------------------------------------------------------
-# The Kolmogorov scale of the logistic
-# ---------------------------------------------------------------------------
+def pg_sample_numpy(
+    h: ArrayLike,
+    z: ArrayLike,
+    rng: np.random.Generator,
+    *,
+    shape: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    """:func:`pg_sample` on the host, with its seed drawn from ``rng``."""
+    return _host_sample("pg", rng, shape, h, z)
 
 
-@jax.custom_batching.custom_vmap
-def _ks_sample_batched(u, seed):
-    """One FFI call for a batch: ``u`` is ``(B, ...)``, ``seed`` is ``(B,)``."""
-    call = jax.ffi.ffi_call(
-        "augax_ks_sample_batched_f64", jax.ShapeDtypeStruct(u.shape, u.dtype)
-    )
-    return call(u, seed)
+def _pg_series_arguments(z):
+    """``|z| / 2`` kept away from 0, its square, and where the series takes over."""
+    r2 = jnp.square(z) / 4
+    # The closed forms lose digits to cancellation at small r, the more so in float32.
+    small = r2 < (0.02**2 if z.dtype == jnp.float64 else 0.2**2)
+    r = jnp.sqrt(jnp.where(small, 1.0, r2))
+    return r, r2, small
 
 
-@_ks_sample_batched.def_vmap
-def _ks_sample_batched_vmap(axis_size, in_batched, u, seed):
-    # As for _sample_batched: merge a further vmap axis into the batch axis.
-    u_b, seed_b = in_batched
-    if not u_b:
-        u = jnp.broadcast_to(u, (axis_size,) + u.shape)
-    if not seed_b:
-        seed = jnp.broadcast_to(seed, (axis_size,) + seed.shape)
-    outer, inner = u.shape[0], u.shape[1]
-    out = _ks_sample_batched(
-        u.reshape((outer * inner,) + u.shape[2:]), seed.reshape(outer * inner)
-    )
-    return out.reshape((outer, inner) + out.shape[1:]), True
+def pg_mean(h: ArrayLike, z: ArrayLike) -> jax.Array:
+    """The mean of ``PG(h, z)``, ``h tanh(z / 2) / (2 z)``, stable at ``z = 0``.
+
+    Differentiable, for the EM and variational updates of a logit.
+    """
+    dtype = jax.dtypes.canonicalize_dtype(jnp.float64)
+    h, z = jnp.asarray(h, dtype), jnp.asarray(z, dtype)
+    r, r2, small = _pg_series_arguments(z)
+    series = (1 + r2 * (-1 / 3 + r2 * (2 / 15 - r2 * 17 / 315))) / 4
+    return h * jnp.where(small, series, jnp.tanh(r) / (4 * r))
 
 
-@jax.custom_batching.custom_vmap
-def _ks_dispatch(u, seed):
-    call = jax.ffi.ffi_call(
-        "augax_ks_sample_f64", jax.ShapeDtypeStruct(u.shape, u.dtype)
-    )
-    return call(u, seed)
+def pg_var(h: ArrayLike, z: ArrayLike) -> jax.Array:
+    """The variance of ``PG(h, z)``, stable at ``z = 0`` and at large ``|z|``.
+
+    With ``r = |z| / 2``, it is ``h (tanh(r) - r sech^2(r)) / (16 r^3)``.
+    """
+    dtype = jax.dtypes.canonicalize_dtype(jnp.float64)
+    h, z = jnp.asarray(h, dtype), jnp.asarray(z, dtype)
+    r, r2, small = _pg_series_arguments(z)
+    e = jnp.exp(-2 * r)
+    sech2 = 4 * e / jnp.square(1 + e)
+    closed = (jnp.tanh(r) - r * sech2) / (16 * r**3)
+    series = (1 + r2 * (-4 / 5 + r2 * (17 / 35 - r2 * 248 / 945))) / 24
+    return h * jnp.where(small, series, closed)
 
 
-@_ks_dispatch.def_vmap
-def _ks_dispatch_vmap(axis_size, in_batched, u, seed):
-    u_b, seed_b = in_batched
-    if not u_b:
-        u = jnp.broadcast_to(u, (axis_size,) + u.shape)
-    if not seed_b:
-        seed = jnp.broadcast_to(seed, (axis_size,))
-    return _ks_sample_batched(u, seed), True
-
-
-def ks_sample(u, key):
-    r"""Draw the Kolmogorov scale ``lam`` given a logistic disturbance ``u``, on-device.
+def ks_sample(
+    u: ArrayLike, key: jax.Array, *, shape: tuple[int, ...] | None = None
+) -> jax.Array:
+    r"""Draw the Kolmogorov scale ``lam`` given a logistic disturbance ``u``.
 
     A standard logistic :math:`\varepsilon` is the normal scale mixture
     :math:`\varepsilon \mid \lambda \sim N(0, \lambda^2)`, :math:`\lambda = 2K`
@@ -224,36 +247,112 @@ def ks_sample(u, key):
     Parameters
     ----------
     u : array_like
-        Shape ``[n]`` float64: the disturbances.
+        The disturbances.
     key : jax.Array
-        A JAX PRNG key. ``vmap`` over a batch of keys draws each element's
-        batch with its own RNG stream.
+        One JAX PRNG key; see :func:`pg_sample`.
+    shape : tuple of int, optional
+        The shape of the result, to which ``u`` broadcasts.
 
     Returns
     -------
     lam : jax.Array
-        The scales, with the shape of ``u``; ``lam**2`` is the variance.
+        The scales; ``lam**2`` is the variance.  A NaN ``u`` draws NaN.
     """
-    _require_x64()
-    u = jnp.asarray(u, jnp.float64)
-    return _ks_dispatch(u, _seed_from_key(key))
+    return _ks(_key_words(key), *_params(shape, u))
 
 
-def ks_sample_numpy(u, rng):
-    """:func:`ks_sample` on the host: the same sampler, for NumPy callers.
+def ks_sample_numpy(
+    u: ArrayLike, rng: np.random.Generator, *, shape: tuple[int, ...] | None = None
+) -> np.ndarray:
+    """:func:`ks_sample` on the host, with its seed drawn from ``rng``."""
+    return _host_sample("ks", rng, shape, u)
+
+
+def crt_sample(
+    y: ArrayLike, r: ArrayLike, key: jax.Array, *, shape: tuple[int, ...] | None = None
+) -> jax.Array:
+    r"""Draw the Chinese restaurant table count ``L ~ CRT(y, r)``.
+
+    The tables that :math:`y` customers occupy at concentration :math:`r`,
+    :math:`L = \sum_{n=0}^{y-1} \mathrm{Bernoulli}(r / (r + n))`.  With it, a
+    negative-binomial dispersion :math:`r` has the conjugate update
+    :math:`r \mid L \sim \mathrm{Gamma}(a + \sum L, b - \sum \log(1 - p))`,
+    in shape and rate (Zhou & Carin 2015).
+
+    The draw is exact.  Its cost grows with ``min(y, r)``, since it thins only once the
+    table probability has fallen below 0.1.
 
     Parameters
     ----------
-    u : array_like
-        The disturbances, any shape, as float64.
-    rng : numpy.random.Generator
-        Supplies the seed of the C++ stream.
+    y : array_like
+        The counts, non-negative integers, in floating point.
+    r : array_like
+        The concentrations, positive.  Broadcast against ``y``.
+    key : jax.Array
+        One JAX PRNG key; see :func:`pg_sample`.
+    shape : tuple of int, optional
+        The shape of the result, to which ``y`` and ``r`` broadcast.
 
     Returns
     -------
-    lam : numpy.ndarray
-        The scales, with the shape of ``u``.
+    tables : jax.Array
+        The counts, integer-valued, in floating point.  An invalid parameter draws NaN.
     """
-    u = np.ascontiguousarray(u, dtype=np.float64)
-    seed = int(rng.integers(0, np.iinfo(np.int64).max))
-    return _cpp.ks_sample_host(u.reshape(-1), seed).reshape(u.shape)
+    return _crt(_key_words(key), *_params(shape, y, r))
+
+
+def crt_sample_numpy(
+    y: ArrayLike,
+    r: ArrayLike,
+    rng: np.random.Generator,
+    *,
+    shape: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    """:func:`crt_sample` on the host, with its seed drawn from ``rng``."""
+    return _host_sample("crt", rng, shape, y, r)
+
+
+def gig_sample(
+    p: ArrayLike,
+    a: ArrayLike,
+    b: ArrayLike,
+    key: jax.Array,
+    *,
+    shape: tuple[int, ...] | None = None,
+) -> jax.Array:
+    r"""Draw from the generalized inverse Gaussian ``GIG(p, a, b)``.
+
+    Its density is proportional to :math:`x^{p-1} \exp(-(a x + b / x) / 2)`.  The draw
+    is exact, by a rejection sampler that is uniformly efficient in the parameters
+    (Devroye 2014).  ``a = 0`` with ``p < 0`` gives the inverse gamma, and ``b = 0``
+    with ``p > 0`` the gamma.
+
+    Parameters
+    ----------
+    p : array_like
+        The index.
+    a, b : array_like
+        The non-negative rates.  All three broadcast together.
+    key : jax.Array
+        One JAX PRNG key; see :func:`pg_sample`.
+    shape : tuple of int, optional
+        The shape of the result, to which the parameters broadcast.
+
+    Returns
+    -------
+    x : jax.Array
+        The draws.  Parameters that define no distribution draw NaN.
+    """
+    return _gig(_key_words(key), *_params(shape, p, a, b))
+
+
+def gig_sample_numpy(
+    p: ArrayLike,
+    a: ArrayLike,
+    b: ArrayLike,
+    rng: np.random.Generator,
+    *,
+    shape: tuple[int, ...] | None = None,
+) -> np.ndarray:
+    """:func:`gig_sample` on the host, with its seed drawn from ``rng``."""
+    return _host_sample("gig", rng, shape, p, a, b)

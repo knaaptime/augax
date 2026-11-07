@@ -13,6 +13,9 @@ jobs:
   Test:
     name: ${{ matrix.os }}, ${{ matrix.environment-file }}
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      issues: write # the scheduled run reports a failure as an issue
     strategy:
       fail-fast: false
       matrix:
@@ -32,12 +35,12 @@ jobs:
         shell: bash -l {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # setuptools-scm needs tags
 
       - name: setup micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: ${{ matrix.environment-file }}
           micromamba-version: 'latest'
@@ -46,23 +49,24 @@ jobs:
         run: pip install -e .  --no-build-isolation --no-deps
 
       - name: Test package
+        id: status
         run: |
           pytest --cov src/augax \
            -v \
            -r a \
            -n auto \
            --color yes \
-           --cov src \
            --cov-append \
            --cov-report term-missing \
            --cov-report xml \
+           --report-log pytest-log.jsonl \
            tests
       - name: codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.xml
-          name: cholax-codecov
+          files: ./coverage.xml
+          name: augax-codecov
 
       - name: Generate and publish the report
         if: |

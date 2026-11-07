@@ -6,7 +6,9 @@
 # jax 0.9.0/0.9.1 (API 0.2), which `jax>=0.9.0` allows, and took JAX's CPU
 # backend down with them.  Raise this pin together with the runtime floor,
 # never alone.
-requires = ["scikit-build-core>=1.1", "setuptools-scm>=8", "nanobind>=2.0", "jax==0.9.0"]
+# cmake and ninja ride their PyPI wheels, so a build needs no toolchain
+# beyond a C++ compiler.
+requires = ["scikit-build-core>=1.1", "cmake>=3.18", "ninja", "setuptools-scm>=8", "nanobind>=2.0", "jax==0.9.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -14,21 +16,49 @@ name = "augax"
 # The version comes from the git tag (vX.Y.Z) via setuptools-scm; see
 # [tool.setuptools_scm].  Never set it by hand.
 dynamic = ["version"]
-description = "JAX-native on-device augmentation draws (Pólya-Gamma) as XLA FFI custom calls"
+description = "Native draws for conditionally Gaussian augmentation in JAX: Pólya-Gamma, Kolmogorov scale, Chinese restaurant table count and generalized inverse Gaussian"
 readme = "README.md"
-license = {text = "BSD-3-Clause"}
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
+authors = [{name = "Elijah Knaap"}]
 requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
 dependencies = [
     "jax>=0.9.0",
     "numpy",
 ]
 
+[project.urls]
+Homepage = "https://github.com/knaaptime/augax"
+Documentation = "https://knaaptime.github.io/augax"
+Issues = "https://github.com/knaaptime/augax/issues"
+
 [project.optional-dependencies]
-test = ["pytest", "scipy"]
+test = ["pytest", "pytest-timeout", "scipy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# A sampler that fails to terminate spins inside native code, where only ending the
+# process helps.
+timeout = 300
+timeout_method = "thread"
 
 [tool.scikit-build]
 cmake.build-type = "Release"
 wheel.packages = ["src/augax"]
+# One abi3 wheel serves Python 3.12 and later; 3.11 gets its own.
+wheel.py-api = "cp312"
 
 # Version from the git tag (vX.Y.Z), like the other packages.  An sdist records
 # it in PKG-INFO, so builds from the sdist (conda-forge) need no git.
